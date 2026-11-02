@@ -3,3 +3,5 @@ build/
 *.obj
 *.exe
 *.out
+*.wav
+!wav.wav

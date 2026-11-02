@@ -16,6 +16,12 @@ static double get_time(void) {
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+static long get_file_size(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0) return st.st_size;
+    return -1;
+}
+
 static int compare_samples(const char *f1, const char *f2) {
     wav_stream_t *a = wav_stream_open(f1);
     wav_stream_t *b = wav_stream_open(f2);
@@ -23,22 +29,14 @@ static int compare_samples(const char *f1, const char *f2) {
 
     uint32_t na = wav_stream_num_samples(a);
     uint32_t nb = wav_stream_num_samples(b);
-    if (na != nb) {
-        printf("  Sample count mismatch: %u vs %u\n", na, nb);
-        wav_stream_close(a);
-        wav_stream_close(b);
-        return 1;
-    }
+    if (na != nb) { wav_stream_close(a); wav_stream_close(b); return 1; }
 
     int errors = 0;
     int32_t sa, sb;
     for (uint32_t i = 0; i < na; i++) {
         if (wav_stream_next_sample(a, &sa) != WAV_OK) { errors++; break; }
         if (wav_stream_next_sample(b, &sb) != WAV_OK) { errors++; break; }
-        if (sa != sb) {
-            if (errors < 5) printf("  Mismatch at sample %u: %d vs %d\n", i, sa, sb);
-            errors++;
-        }
+        if (sa != sb) { errors++; break; }
     }
 
     wav_stream_close(a);
@@ -82,6 +80,8 @@ static int test_file(const char *path) {
     uint16_t ch = wav_stream_channels(ws);
     wav_stream_close(ws);
 
+    long original_size = get_file_size(path);
+    
     double start = get_time();
     int res = encode_audio(PREDICTOR_DELTA, ENTROPY_RANGE_CODER, path, comp_path);
     double comp_time = get_time() - start;
@@ -91,6 +91,8 @@ static int test_file(const char *path) {
         remove(comp_path);
         return 1;
     }
+
+    long compressed_size = get_file_size(comp_path);
 
     FILE *in = fopen(comp_path, "rb");
     FILE *out = fopen(restored_path, "wb");
@@ -120,8 +122,14 @@ static int test_file(const char *path) {
 
     int diff = compare_samples(path, restored_path);
 
+    double ratio = (double)compressed_size / original_size * 100.0;
+    double space_saved = 100.0 - ratio;
+
     if (diff == 0 && decode_errors == 0) {
-        printf("  [OK] %s | C: %.3fs, D: %.3fs\n", path, comp_time, decomp_time);
+        printf("  [OK] %s\n", path);
+        printf("       Original: %ld B | Compressed: %ld B | Ratio: %.1f%% (saved %.1f%%)\n", 
+               original_size, compressed_size, ratio, space_saved);
+        printf("       C: %.3fs, D: %.3fs\n", comp_time, decomp_time);
     } else {
         printf("  [FAIL] %s | diff=%d, decode_errors=%d\n", path, diff, decode_errors);
     }

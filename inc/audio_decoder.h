@@ -1,9 +1,9 @@
 #ifndef AUDIO_DECODER_H__
 #define AUDIO_DECODER_H__
 
-#include <stdio.h>
-#include <stdint.h>
 #include "notflac_format.h"
+#include <stdint.h>
+#include <stdio.h>
 
 typedef struct audio_decoder audio_decoder_t;
 

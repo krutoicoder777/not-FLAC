@@ -19,8 +19,11 @@ set(CORE_SRCS
     src/audio_decoder.c
 )
 
-add_executable(test_notflac_roundtrip tests/test_notflac_roundtrip.c ${CORE_SRCS})
-target_link_libraries(test_notflac_roundtrip wav_stream dz_processor entropy_coder)
+add_executable(notflac src/main.c ${CORE_SRCS})
+target_link_libraries(notflac wav_stream dz_processor entropy_coder)
+
+add_executable(notflac_player src/player.c ${CORE_SRCS})
+target_link_libraries(notflac_player wav_stream dz_processor entropy_coder)
 
 add_executable(test_wav_stream tests/test_wav_stream.c)
 target_link_libraries(test_wav_stream wav_stream)
@@ -28,3 +31,5 @@ target_link_libraries(test_wav_stream wav_stream)
 add_executable(test_dz_stream tests/test_dz_stream.c)
 target_link_libraries(test_dz_stream wav_stream dz_processor)
 
+add_executable(test_notflac_roundtrip tests/test_notflac_roundtrip.c ${CORE_SRCS})
+target_link_libraries(test_notflac_roundtrip wav_stream dz_processor entropy_coder)

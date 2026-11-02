@@ -1,8 +1,8 @@
 #ifndef WAV_STREAM_H__
 #define WAV_STREAM_H__
 
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define WAV_OK 0
 #define WAV_ERR_IO 1

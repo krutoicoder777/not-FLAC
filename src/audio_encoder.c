@@ -1,38 +1,24 @@
 #include "audio_encoder.h"
-#include "dz_processor.h"
-#include "models.h"
+#include "entropy_encoder.h"
+#include "errors.h"
 #include "notflac_format.h"
-#include "range_coder.h"
+#include "predictor_encoder.h"
+#include "wav_block.h"
 #include "wav_stream.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const char *in_path, const char *out_path)
+static int write_nf_header(FILE *out, wav_block_reader_t *wb, predictor_method_t predictor, entropy_method_t entropy)
 {
-    if (predictor != PREDICTOR_DELTA || entropy != ENTROPY_RANGE_CODER)
-        return -1;
-
-    wav_stream_t *ws = wav_stream_open(in_path);
-    if (!ws)
-        return -1;
-
-    uint32_t num_samples = wav_stream_num_samples(ws);
-    uint16_t bits = wav_stream_bits_per_sample(ws);
-    uint32_t sample_rate = wav_stream_sample_rate(ws);
-    uint16_t channels = wav_stream_channels(ws);
+    uint32_t num_samples = wav_block_reader_num_samples(wb);
+    uint16_t bits = wav_block_reader_bits_per_sample(wb);
+    uint32_t sample_rate = wav_block_reader_sample_rate(wb);
+    uint16_t channels = wav_block_reader_channels(wb);
 
     if (bits != 16 && bits != 24 && bits != 32)
     {
-        wav_stream_close(ws);
-        return -1;
-    }
-
-    FILE *out = fopen(out_path, "wb");
-    if (!out)
-    {
-        wav_stream_close(ws);
-        return -1;
+        return ERR_BITS_PER_SAMPLE;
     }
 
     uint32_t magic = NOTFLAC_MAGIC;
@@ -51,56 +37,150 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
     fwrite(&bits, 2, 1, out);
     fwrite(&num_samples, 4, 1, out);
 
-    range_coder_t *rc = rc_init(out);
-    if (!rc)
+    uint32_t block_size = BLOCK_SIZE;
+    fwrite(&block_size, 4, 1, out);
+
+    uint64_t table_offset = 0;
+    fwrite(&table_offset, 8, 1, out);
+
+    if (predictor == PREDICTOR_LPC)
     {
-        fclose(out);
-        wav_stream_close(ws);
-        return -1;
+        uint32_t order = LPC_ORDER;
+        fwrite(&order, 4, 1, out);
+    }
+    return OK;
+}
+
+int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const char *in_path, const char *out_path)
+{
+    if ((predictor != PREDICTOR_DELTA && predictor != PREDICTOR_LPC) || entropy != ENTROPY_RANGE_CODER)
+    {
+        return ERR_ARGS;
     }
 
-    int num_models = bits / 8;
-    model_t *models = malloc(num_models * sizeof(model_t));
-    if (!models)
+    wav_block_reader_t *wb = wav_block_reader_create(in_path, BLOCK_SIZE);
+    if (!wb)
     {
-        rc_destroy(rc);
-        fclose(out);
-        wav_stream_close(ws);
-        return -1;
-    }
-    for (int i = 0; i < num_models; i++)
-        model_init(&models[i]);
-
-    dz_encoder_t *enc = dze_init(bits);
-    if (!enc)
-    {
-        free(models);
-        rc_destroy(rc);
-        fclose(out);
-        wav_stream_close(ws);
-        return -1;
+        return ERR_MEM;
     }
 
-    int32_t sample;
-    for (uint32_t i = 0; i < num_samples; i++)
+    FILE *out = fopen(out_path, "wb");
+    if (!out)
     {
-        if (wav_stream_next_sample(ws, &sample) != WAV_OK)
-            break;
+        wav_block_reader_destroy(wb);
+        return ERR_IO;
+    }
 
-        uint32_t encoded = dze_next(enc, sample);
-        for (int b = num_models - 1; b >= 0; b--)
+    int rc = write_nf_header(out, wb, predictor, entropy);
+    if (rc != OK)
+    {
+        wav_block_reader_destroy(wb);
+        fclose(out);
+        return rc;
+    }
+    const int16_t bps = wav_block_reader_bits_per_sample(wb);
+    predictor_encoder_t *pe;
+    entropy_encoder_t *enc;
+    const int32_t *block;
+    const uint32_t *residuals;
+    const int32_t *quotients;
+    int precision;
+    uint64_t *blocks_offset;
+    uint32_t num_blocks = wav_block_reader_num_blocks(wb);
+    uint32_t block_size;
+    blocks_offset = malloc(sizeof(uint64_t) * num_blocks);
+    if (!blocks_offset)
+    {
+        wav_block_reader_destroy(wb);
+        fclose(out);
+        return ERR_MEM;
+    }
+
+    for (size_t i = 0; i < num_blocks; i++)
+    {
+        blocks_offset[i] = ftell(out);
+        block = wav_block_reader_next(wb);
+        block_size = wav_block_reader_count(wb);
+        if (block_size == 0)
         {
-            uint8_t byte = (encoded >> (b * 8)) & 0xFF;
-            rc_update(rc, model_cum(&models[b], byte), model_freq(&models[b], byte), models[b].total);
-            model_update(&models[b], byte);
+            break;
         }
+        if (block_size != BLOCK_SIZE && i != num_blocks - 1)
+        {
+            free(blocks_offset);
+            wav_block_reader_destroy(wb);
+            fclose(out);
+            return ERR_IO;
+        }
+        if (predictor == PREDICTOR_LPC)
+        {
+            pe = predictor_encoder_create_lpc(LPC_ORDER, block_size);
+        }
+        else
+        {
+            pe = predictor_encoder_create_delta(bps, block_size);
+        }
+        if (!pe)
+        {
+            free(blocks_offset);
+            wav_block_reader_destroy(wb);
+            fclose(out);
+            return ERR_MEM;
+        }
+
+        enc = entropy_create_range(out);
+        if (!enc)
+        {
+            predictor_encoder_destroy(pe);
+            free(blocks_offset);
+            wav_block_reader_destroy(wb);
+            fclose(out);
+            return ERR_MEM;
+        }
+
+        residuals = predictor_encoder_encode_block(pe, block, block_size);
+        if (!residuals)
+        {
+            entropy_destroy(enc);
+            predictor_encoder_destroy(pe);
+            free(blocks_offset);
+            wav_block_reader_destroy(wb);
+            fclose(out);
+            return ERR_IO;
+        }
+
+        if (predictor == PREDICTOR_LPC)
+        {
+            quotients = predictor_encoder_quotients(pe);
+            precision = predictor_encoder_precision(pe);
+            entropy_encode_precision(enc, precision);
+            for (size_t j = 0; j < LPC_ORDER; j++)
+            {
+                entropy_encode_quotient(enc, quotients[j]);
+            }
+        }
+
+        for (size_t j = 0; j < block_size; j++)
+        {
+            entropy_encode_sample(enc, residuals[j]);
+        }
+
+        entropy_destroy(enc);
+        predictor_encoder_destroy(pe);
+    }
+    uint64_t table_offset = ftell(out);
+    fseek(out, OFFSET_OF_TABLE_OFFSET_IN_HEADER, SEEK_SET);
+    fwrite(&table_offset, 8, 1, out);
+    fseek(out, 0, SEEK_END);
+    for (size_t i = 0; i < num_blocks; i++)
+    {
+        fwrite(&blocks_offset[i], 8, 1, out);
+        uint32_t bsize = (i == num_blocks - 1) ? block_size : BLOCK_SIZE;
+        fwrite(&bsize, 4, 1, out);
     }
 
-    rc_flush(rc);
-    dze_destroy(enc);
-    free(models);
-    rc_destroy(rc);
-    wav_stream_close(ws);
+    free(blocks_offset);
+    wav_block_reader_destroy(wb);
     fclose(out);
-    return 0;
+    return OK;
 }

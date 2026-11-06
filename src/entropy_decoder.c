@@ -79,11 +79,11 @@ void entropy_d_destroy(entropy_decoder_t *dec)
     free(dec);
 }
 
-int entropy_decoder_set_state(entropy_decoder_t *dec)
+int entropy_decoder_set_state(entropy_decoder_t *dec, int block_size)
 {
     if (dec->method == ENTROPY_RICE_CODER && dec->rice_d)
     {
-        return rice_decoder_set_distribution(dec->rice_d);
+        return rice_decoder_set_distribution(dec->rice_d, block_size);
     }
     return 0;
 }

@@ -1,14 +1,21 @@
 #include <stdint.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "rice_coder.h"
+
+#define MAX_P 6
+#define MAX_K 1 << MAX_P
 
 typedef struct rice_coder rice_coder_t;
 
 struct rice_coder
 {
 	FILE *out;
-	uint8_t k;
+	uint8_t p;
+	uint8_t k[MAX_K];
+	uint32_t cur_idx;
+	uint32_t part_size;
 	uint8_t bits;
 	uint8_t bits_to_write;
 };
@@ -19,9 +26,10 @@ rice_coder_t *rice_coder_create(FILE *out)
 	if (rice)
 	{
 		rice->out = out;
-		rice->k = 0;
 		rice->bits = 0;
 		rice->bits_to_write = 0;
+		rice->cur_idx = 0;
+		rice->part_size = 0;
 	}
 	return rice;
 }
@@ -31,7 +39,7 @@ void rice_coder_destroy(rice_coder_t *rice)
 	free(rice);
 }
 
-static uint8_t optimal_k(const uint32_t *distribution, int distribution_size)
+static uint8_t optimal_k(const uint32_t *distribution, int distribution_size, uint64_t *cost)
 {
 	if (distribution_size == 0)
 	{
@@ -52,20 +60,54 @@ static uint8_t optimal_k(const uint32_t *distribution, int distribution_size)
 			best_k = k;
 		}
 	}
+	*cost = best_bits;
 	return best_k;
 }
 
-//set block counts optimal k for the distribution and writes it to file
+void optimal_params(rice_coder_t *rice, const uint32_t *distribution, int distribution_size)
+{
+	uint64_t cost, tmp, best_cost = UINT64_MAX;
+	uint8_t karr[MAX_K];
+	int num_parts, part_size, n, start; 
+	for(uint8_t p = 0; p <= MAX_P; p++)
+	{
+		num_parts = 1<<p;
+		part_size = (distribution_size + num_parts - 1) / num_parts;
+		cost = 8;
+		for (int i = 0; i < num_parts; i++)
+		{
+			start = i * part_size;
+			n = (start + part_size > distribution_size) ? (distribution_size - start) : part_size;
+			if (n <= 0) break;
+			karr[i] = optimal_k(distribution + start, n, &tmp);
+			cost += 8 + tmp;
+		}
+		if (cost < best_cost)
+		{
+			best_cost = cost;
+			rice->p = p;
+			memcpy(rice->k, karr, num_parts);
+		}
+	}
+
+	rice->part_size = (distribution_size + (1<<rice->p) - 1) / (1<<rice->p);
+}
+
 int rice_coder_set_distribution(rice_coder_t *rice, const uint32_t *distribution, int distribution_size)
 {
 	int rc = 0;
 	if (rice->bits_to_write != 0)
 	{
-		rc = 1;
 		rice_coder_flush(rice);
+		rc = 1;
 	}
-	rice->k = optimal_k(distribution, distribution_size);
-	fputc(rice->k, rice->out);
+	optimal_params(rice, distribution, distribution_size);
+	fputc(rice->p, rice->out);
+	for (int i = 0; i < (1 << rice->p); i++)
+	{
+		fputc(rice->k[i], rice->out);
+	}
+	rice->cur_idx = 0;
 	return rc;
 }
 
@@ -90,18 +132,20 @@ static void queue_bit(rice_coder_t *rice, uint8_t bit)
 
 void rice_coder_encode_elem(rice_coder_t *rice, uint32_t res)
 {
-	uint32_t q = res >> rice->k;
-	uint32_t r = res & ((1u << rice->k) - 1);
+	uint8_t cur_k = rice->cur_idx / rice->part_size;
+	uint32_t q = res >> rice->k[cur_k];
+	uint32_t r = res & ((1u << rice->k[cur_k]) - 1);
 
 	for (uint32_t i = 0; i < q; i++)
 	{
 		queue_bit(rice, 0);
 	}
 	queue_bit(rice, 1);
-	for (int i = rice->k - 1; i >= 0; i--)
+	for (int i = rice->k[cur_k] - 1; i >= 0; i--)
 	{
 		queue_bit(rice, (r >> i)&1);
 	}
+	rice->cur_idx++;
 }
 
 void rice_coder_flush(rice_coder_t *rice)
@@ -119,7 +163,10 @@ typedef struct rice_decoder rice_decoder_t;
 struct rice_decoder
 {
 	FILE *in;
-	uint8_t k;
+	uint8_t k[MAX_K];
+	uint8_t p;
+	uint32_t cur_idx;
+	uint32_t part_size;
 	uint8_t bits;
 	uint8_t bits_in_buf;	
 };
@@ -130,9 +177,10 @@ rice_decoder_t *rice_decoder_create(FILE *in)
 	if (rice)
 	{
 		rice->in = in;
-		rice->k = 0;
 		rice->bits = 0;
 		rice->bits_in_buf = 0;
+		rice->cur_idx = 0;
+		rice->part_size = 0;
 	}
 	return rice;
 }
@@ -143,16 +191,25 @@ void rice_decoder_destroy(rice_decoder_t *rice)
 }
 
 //reads k value from file
-int rice_decoder_set_distribution(rice_decoder_t *rice)
+int rice_decoder_set_distribution(rice_decoder_t *rice, int distribution_size)
 {
 	rice->bits = 0;
 	rice->bits_in_buf = 0;
-	int c = fgetc(rice->in);
-	if (c == EOF)
+	rice->cur_idx = 0;
+	rice->p = fgetc(rice->in);
+	if (rice->p == EOF)
 	{
 		return -1;
 	}
-	rice->k = (uint8_t)c;
+	for (int i = 0; i < 1<<rice->p; i++)
+	{
+		rice->k[i] = fgetc(rice->in);
+		if(rice->k[i] == EOF)
+		{
+			return -1;
+		}
+	}
+	rice->part_size = (distribution_size + (1<<rice->p) - 1) / (1<<rice->p);
 	return 0;
 }
 
@@ -180,13 +237,15 @@ uint32_t rice_decoder_decode_elem(rice_decoder_t *rice)
 	uint32_t elem = 0;
 	uint32_t q = 0;
 	uint32_t r = 0;
+	uint32_t cur_k = rice->cur_idx / rice->part_size;
 	while (dequeue_bit(rice) != 1)
 	{
 		q++;
 	}
-	for (int i = rice->k - 1; i>=0; i--)
+	for (int i = rice->k[cur_k] - 1; i>=0; i--)
 	{
 		r |= dequeue_bit(rice) << i;
 	}
-	return (q<<rice->k)|r;
+	rice->cur_idx++;
+	return (q<<rice->k[cur_k])|r;
 }

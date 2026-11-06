@@ -219,7 +219,7 @@ const int32_t *audio_decoder_decode_block(audio_decoder_t *dec, int *cur_samples
 
     if (dec->entropy == ENTROPY_RICE_CODER)
     {
-        int rc = entropy_decoder_set_state(dec->ed);
+        int rc = entropy_decoder_set_state(dec->ed, dec->cur_block_samples);
         if (rc != 0)
         {
             return NULL;

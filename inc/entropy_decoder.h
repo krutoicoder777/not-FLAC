@@ -15,6 +15,6 @@ uint8_t entropy_decode_precision(entropy_decoder_t *dec);
 uint8_t entropy_decode_byte(entropy_decoder_t *dec);
 int32_t entropy_decode_quotient(entropy_decoder_t *dec);
 
-int entropy_decoder_set_state(entropy_decoder_t *dec);
+int entropy_decoder_set_state(entropy_decoder_t *dec, int block_size);
 
 #endif

@@ -18,7 +18,7 @@ typedef struct rice_decoder rice_decoder_t;
 rice_decoder_t *rice_decoder_create(FILE *in);
 void rice_decoder_destroy(rice_decoder_t *rice);
 //reads k value from file
-int rice_decoder_set_distribution(rice_decoder_t *rice);
+int rice_decoder_set_distribution(rice_decoder_t *rice, int distribution_size);
 uint32_t rice_decoder_decode_elem(rice_decoder_t *rice);
 
 #endif

@@ -1,5 +1,4 @@
 build/
-bench.sh
 *.o
 *.obj
 *.exe

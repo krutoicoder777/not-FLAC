@@ -15,11 +15,6 @@ struct predictor_decoder
     lpc_decoder_t *lpc;
 };
 
-static int32_t unzigzag(uint32_t z)
-{
-    return (int32_t)((z >> 1) ^ -(int32_t)(z & 1));
-}
-
 predictor_decoder_t *predictor_decoder_create_lpc(int order, int block_size)
 {
     predictor_decoder_t *dec = malloc(sizeof(predictor_decoder_t));
@@ -123,7 +118,7 @@ const int32_t *predictor_decoder_decode_block(predictor_decoder_t *dec, const ui
     {
         for (int i = 0; i < block_size; i++)
         {
-            int32_t residual = unzigzag(residuals[i]);
+            uint32_t residual = residuals[i];
             dec->samples[i] = lpc_decoder_decode_sample(dec->lpc, residual);
         }
     }

@@ -87,6 +87,13 @@ audio_decoder_t *audio_decoder_open(FILE *in)
     dec->predictor = (predictor_method_t)predictor;
     dec->num_blocks = (dec->num_samples + dec->block_size - 1) / dec->block_size;
 
+    if (dec->entropy == ENTROPY_RICE_CODER)
+    {
+        dec->ed = entropy_d_create_rice(in);
+        if (!dec->ed)
+            goto fail;
+    }
+
     dec->blocks_offset = malloc(sizeof(uint64_t) * dec->num_blocks);
     dec->blocks_size = malloc(sizeof(uint32_t) * dec->num_blocks);
     if (!dec->blocks_offset || !dec->blocks_size)
@@ -107,7 +114,10 @@ audio_decoder_t *audio_decoder_open(FILE *in)
     dec->cur_sample_idx = 0;
     dec->cur_samples = NULL;
     dec->pd = NULL;
-    dec->ed = NULL;
+    if (dec->entropy == ENTROPY_RANGE_CODER)
+    {
+        dec->ed = NULL;
+    }
 
     if (audio_decoder_seek_block(dec, 0) != OK)
         goto fail;
@@ -168,7 +178,7 @@ int audio_decoder_seek_block(audio_decoder_t *dec, uint32_t block_index)
         predictor_decoder_destroy(dec->pd);
         dec->pd = NULL;
     }
-    if (dec->ed)
+    if (dec->ed && dec->entropy == ENTROPY_RANGE_CODER)
     {
         entropy_d_destroy(dec->ed);
         dec->ed = NULL;
@@ -189,10 +199,9 @@ int audio_decoder_seek_block(audio_decoder_t *dec, uint32_t block_index)
     if (dec->entropy == ENTROPY_RANGE_CODER)
     {
         dec->ed = entropy_d_create_range(dec->in);
+        if (!dec->ed)
+            return ERR_MEM;
     }
-    if (!dec->ed)
-        return ERR_MEM;
-
     dec->cur_block_index = block_index;
     dec->cur_block_samples = actual_samples;
     dec->cur_sample_idx = 0;
@@ -206,6 +215,15 @@ const int32_t *audio_decoder_decode_block(audio_decoder_t *dec, int *cur_samples
     {
         *cur_samples = dec->cur_block_samples;
         return dec->cur_samples;
+    }
+
+    if (dec->entropy == ENTROPY_RICE_CODER)
+    {
+        int rc = entropy_decoder_set_state(dec->ed);
+        if (rc != 0)
+        {
+            return NULL;
+        }
     }
 
     if (dec->predictor == PREDICTOR_LPC)
@@ -222,6 +240,7 @@ const int32_t *audio_decoder_decode_block(audio_decoder_t *dec, int *cur_samples
     uint32_t *residuals = malloc(sizeof(uint32_t) * dec->cur_block_samples);
     if (!residuals)
         return NULL;
+
     for (uint32_t i = 0; i < dec->cur_block_samples; i++)
     {
         residuals[i] = entropy_decode_sample(dec->ed);

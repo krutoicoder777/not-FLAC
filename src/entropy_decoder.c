@@ -1,6 +1,7 @@
 #include "models.h"
 #include "notflac_format.h"
 #include "range_decoder.h"
+#include "rice_coder.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,51 +12,83 @@ struct entropy_decoder
 {
     FILE *in;
     entropy_method_t method;
-    // Range coder
     range_decoder_t *range_d;
     slot_model_t sample_m;
     slot_model_t quot_m;
     model_t byte_m;
     prec_model_t precision_m;
+    rice_decoder_t *rice_d;
 };
 
 entropy_decoder_t *entropy_d_create_range(FILE *in)
 {
     entropy_decoder_t *dec = malloc(sizeof(entropy_decoder_t));
-    if (dec)
+    if (!dec)
     {
-        dec->in = in;
-        dec->range_d = rd_init(in);
-        if (!dec->range_d)
-        {
-            free(dec);
-            dec = NULL;
-        }
-        else
-        {
-            dec->method = ENTROPY_RANGE_CODER;
-            model_init(&dec->byte_m);
-            prec_model_init(&dec->precision_m);
-            slot_model_init(&dec->quot_m);
-            slot_model_init(&dec->sample_m);
-        }
+        return NULL;
     }
+    dec->in = in;
+    dec->rice_d = NULL;
+    dec->range_d = rd_init(in);
+    if (!dec->range_d)
+    {
+        free(dec);
+        return NULL;
+    }
+    dec->method = ENTROPY_RANGE_CODER;
+    model_init(&dec->byte_m);
+    prec_model_init(&dec->precision_m);
+    slot_model_init(&dec->quot_m);
+    slot_model_init(&dec->sample_m);
+    return dec;
+}
+
+entropy_decoder_t *entropy_d_create_rice(FILE *in)
+{
+    entropy_decoder_t *dec = malloc(sizeof(entropy_decoder_t));
+    if (!dec)
+    {
+        return NULL;
+    }
+    dec->in = in;
+    dec->range_d = NULL;
+    dec->rice_d = rice_decoder_create(in);
+    if (!dec->rice_d)
+    {
+        free(dec);
+        return NULL;
+    }
+    dec->method = ENTROPY_RICE_CODER;
     return dec;
 }
 
 void entropy_d_destroy(entropy_decoder_t *dec)
 {
-    if (dec)
+    if (!dec)
     {
-        if (dec->range_d)
-        {
-            rd_destroy(dec->range_d);
-        }
-        free(dec);
+        return;
     }
+    if (dec->range_d)
+    {
+        rd_destroy(dec->range_d);
+    }
+    if (dec->rice_d)
+    {
+        rice_decoder_destroy(dec->rice_d);
+    }
+    free(dec);
 }
 
-uint32_t entropy_decode_sample(entropy_decoder_t *dec) // returned sample is zigzag`ed
+int entropy_decoder_set_state(entropy_decoder_t *dec)
+{
+    if (dec->method == ENTROPY_RICE_CODER && dec->rice_d)
+    {
+        return rice_decoder_set_distribution(dec->rice_d);
+    }
+    return 0;
+}
+
+uint32_t entropy_decode_sample(entropy_decoder_t *dec)
 {
     if (dec->method == ENTROPY_RANGE_CODER)
     {
@@ -75,10 +108,11 @@ uint32_t entropy_decode_sample(entropy_decoder_t *dec) // returned sample is zig
         }
         return sample;
     }
-    else
+    else if (dec->method == ENTROPY_RICE_CODER)
     {
-        return 0;
+        return rice_decoder_decode_elem(dec->rice_d);
     }
+    return 0;
 }
 
 uint8_t entropy_decode_precision(entropy_decoder_t *dec)
@@ -90,10 +124,16 @@ uint8_t entropy_decode_precision(entropy_decoder_t *dec)
         rd_update(dec->range_d, prec_model_cum(&dec->precision_m, p), prec_model_freq(&dec->precision_m, p));
         return (uint8_t)p;
     }
-    else
+    else if (dec->method == ENTROPY_RICE_CODER)
     {
-        return 0;
+        int c = fgetc(dec->in);
+        if (c == EOF)
+        {
+            return 0;
+        }
+        return (uint8_t)c;
     }
+    return 0;
 }
 
 uint8_t entropy_decode_byte(entropy_decoder_t *dec)
@@ -106,13 +146,19 @@ uint8_t entropy_decode_byte(entropy_decoder_t *dec)
         model_update(&dec->byte_m, b);
         return (uint8_t)b;
     }
-    else
+    else if (dec->method == ENTROPY_RICE_CODER)
     {
-        return 0;
+        int c = fgetc(dec->in);
+        if (c == EOF)
+        {
+            return 0;
+        }
+        return (uint8_t)c;
     }
+    return 0;
 }
 
-int32_t entropy_decode_quotient(entropy_decoder_t *dec) // returned quotient is not zigzag`ed
+int32_t entropy_decode_quotient(entropy_decoder_t *dec)
 {
     if (dec->method == ENTROPY_RANGE_CODER)
     {
@@ -132,8 +178,14 @@ int32_t entropy_decode_quotient(entropy_decoder_t *dec) // returned quotient is 
         }
         return (int32_t)((zz >> 1) ^ -(int32_t)(zz & 1));
     }
-    else
+    else if (dec->method == ENTROPY_RICE_CODER)
     {
-        return 0;
+        int32_t q;
+        if (fread(&q, 4, 1, dec->in) != 1)
+        {
+            return 0;
+        }
+        return q;
     }
+    return 0;
 }

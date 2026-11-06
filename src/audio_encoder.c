@@ -53,7 +53,8 @@ static int write_nf_header(FILE *out, wav_block_reader_t *wb, predictor_method_t
 
 int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const char *in_path, const char *out_path)
 {
-    if ((predictor != PREDICTOR_DELTA && predictor != PREDICTOR_LPC) || entropy != ENTROPY_RANGE_CODER)
+    if ((predictor != PREDICTOR_DELTA && predictor != PREDICTOR_LPC) ||
+        (entropy != ENTROPY_RANGE_CODER && entropy != ENTROPY_RICE_CODER))
     {
         return ERR_ARGS;
     }
@@ -80,7 +81,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
     }
     const int16_t bps = wav_block_reader_bits_per_sample(wb);
     predictor_encoder_t *pe;
-    entropy_encoder_t *enc;
+    entropy_encoder_t *enc = NULL;
     const int32_t *block;
     const uint32_t *residuals;
     const int32_t *quotients;
@@ -94,6 +95,17 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
         wav_block_reader_destroy(wb);
         fclose(out);
         return ERR_MEM;
+    }
+    if (entropy == ENTROPY_RICE_CODER)
+    {
+        enc = entropy_create_rice(out);
+        if (!enc)
+        {
+            wav_block_reader_destroy(wb);
+            fclose(out);
+            free(blocks_offset);
+            return ERR_MEM;
+        }
     }
 
     for (size_t i = 0; i < num_blocks; i++)
@@ -116,9 +128,13 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
         {
             pe = predictor_encoder_create_lpc(LPC_ORDER, block_size);
         }
-        else
+        else if (predictor == PREDICTOR_DELTA)
         {
             pe = predictor_encoder_create_delta(bps, block_size);
+        }
+        else
+        {
+            pe = NULL;
         }
         if (!pe)
         {
@@ -127,15 +143,17 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
             fclose(out);
             return ERR_MEM;
         }
-
-        enc = entropy_create_range(out);
-        if (!enc)
+        if (entropy == ENTROPY_RANGE_CODER)
         {
-            predictor_encoder_destroy(pe);
-            free(blocks_offset);
-            wav_block_reader_destroy(wb);
-            fclose(out);
-            return ERR_MEM;
+            enc = entropy_create_range(out);
+            if (!enc)
+            {
+                predictor_encoder_destroy(pe);
+                free(blocks_offset);
+                wav_block_reader_destroy(wb);
+                fclose(out);
+                return ERR_MEM;
+            }
         }
 
         residuals = predictor_encoder_encode_block(pe, block, block_size);
@@ -147,6 +165,12 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
             wav_block_reader_destroy(wb);
             fclose(out);
             return ERR_IO;
+        }
+
+        if (entropy == ENTROPY_RICE_CODER)
+        {
+            rc = entropy_set_state(enc, residuals, block_size);
+            blocks_offset[i] += rc;
         }
 
         if (predictor == PREDICTOR_LPC)
@@ -165,8 +189,15 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
             entropy_encode_sample(enc, residuals[j]);
         }
 
-        entropy_destroy(enc);
+        if (entropy == ENTROPY_RANGE_CODER)
+        {
+            entropy_destroy(enc);
+        }
         predictor_encoder_destroy(pe);
+    }
+    if (entropy == ENTROPY_RICE_CODER)
+    {
+        entropy_destroy(enc);
     }
     uint64_t table_offset = ftell(out);
     fseek(out, OFFSET_OF_TABLE_OFFSET_IN_HEADER, SEEK_SET);

@@ -21,6 +21,11 @@ struct lpc_decoder {
     int history_fill;
 };
 
+static uint32_t zigzag(int32_t n)
+{
+    return ((uint32_t)n << 1) ^ (uint32_t)(n >> 31);
+}
+
 lpc_encoder_t *lpc_encoder_create(int order)
 {
     if (order < 1 || order > 32)
@@ -172,7 +177,7 @@ void lpc_encoder_encode_block(lpc_encoder_t *enc, const int32_t *block, int coun
     free(r);
 }
 
-int32_t lpc_encoder_pop(lpc_encoder_t *enc)
+uint32_t lpc_encoder_pop(lpc_encoder_t *enc)
 {
     if (enc->block_tail <= 0)
     {
@@ -182,7 +187,7 @@ int32_t lpc_encoder_pop(lpc_encoder_t *enc)
     if (idx < enc->order)
     {
         enc->block_tail--;
-        return enc->current_block[idx];
+        return zigzag(enc->current_block[idx]);
     }
     int64_t pred = 0;
     for (int j = 0; j < enc->order; j++)
@@ -192,7 +197,7 @@ int32_t lpc_encoder_pop(lpc_encoder_t *enc)
     int32_t hat = (int32_t)(pred >> enc->precision);
     int32_t residual = enc->current_block[idx] - hat;
     enc->block_tail--;
-    return residual;
+    return zigzag(residual);
 }
 
 const int32_t *lpc_encoder_quotients(lpc_encoder_t *enc)
@@ -249,8 +254,14 @@ void lpc_decoder_set_quotients(lpc_decoder_t *dec, const int32_t *quotients, int
     memset(dec->history, 0, dec->order * sizeof(int32_t));
 }
 
-int32_t lpc_decoder_decode_sample(lpc_decoder_t *dec, int32_t residual)
+static int32_t unzigzag(uint32_t z)
 {
+    return (int32_t)((z >> 1) ^ -(int32_t)(z & 1));
+}
+
+int32_t lpc_decoder_decode_sample(lpc_decoder_t *dec, uint32_t zresidual)
+{
+	int32_t residual = unzigzag(zresidual);
     int64_t pred = 0;
     if (dec->history_fill >= dec->order)
     {

@@ -84,11 +84,6 @@ void predictor_encoder_destroy(predictor_encoder_t *pe)
     free(pe);
 }
 
-static uint32_t zigzag(int32_t n)
-{
-    return ((uint32_t)n << 1) ^ (uint32_t)(n >> 31);
-}
-
 const uint32_t *predictor_encoder_encode_block(predictor_encoder_t *pe, const int32_t *block, int block_size)
 {
     if (block_size > pe->max_block_size)
@@ -110,8 +105,8 @@ const uint32_t *predictor_encoder_encode_block(predictor_encoder_t *pe, const in
         lpc_encoder_encode_block(pe->lpc, block, block_size);
         for (int i = 0; i < block_size; i++)
         {
-            int32_t residual = lpc_encoder_pop(pe->lpc);
-            pe->residuals[i] = zigzag(residual);
+            uint32_t residual = lpc_encoder_pop(pe->lpc);
+            pe->residuals[i] = residual;
         }
     }
     return pe->residuals;

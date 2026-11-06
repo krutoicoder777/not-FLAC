@@ -13,7 +13,7 @@ static void print_usage(const char *prog)
     printf("  %s compress <in.wav> <out.notflac> [predictor] [entropy]\n", prog);
     printf("  %s decompress <in.notflac> <out.wav>\n", prog);
     printf("  predictor: 0 = Delta, 1 = LPC (default: 1)\n");
-    printf("  entropy:   0 = Range Coder (default: 0)\n");
+    printf("  entropy:   0 = Range Coder, 1 = Rice (default: 1)\n");
 }
 
 static int do_compress(const char *in, const char *out, uint8_t pred, uint8_t ent)
@@ -68,11 +68,25 @@ int main(int argc, char *argv[])
     if (strcmp(argv[1], "compress") == 0)
     {
         uint8_t pred = PREDICTOR_LPC;
-        uint8_t ent = ENTROPY_RANGE_CODER;
+        uint8_t ent = ENTROPY_RICE_CODER;
         if (argc >= 5)
+        {
             pred = (uint8_t)atoi(argv[4]);
+            if (pred != PREDICTOR_DELTA && pred != PREDICTOR_LPC)
+            {
+                printf("Error: invalid predictor '%s' (use 0 = Delta, 1 = LPC)\n", argv[4]);
+                return 1;
+            }
+        }
         if (argc >= 6)
+        {
             ent = (uint8_t)atoi(argv[5]);
+            if (ent != ENTROPY_RANGE_CODER && ent != ENTROPY_RICE_CODER)
+            {
+                printf("Error: invalid entropy '%s' (use 0 = Range, 1 = Rice)\n", argv[5]);
+                return 1;
+            }
+        }
         return do_compress(argv[2], argv[3], pred, ent);
     }
     else if (strcmp(argv[1], "decompress") == 0)

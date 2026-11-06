@@ -13,49 +13,74 @@ The current pipeline consists of two main stages:
    - **LPC (Linear Predictive Coding)**: each block of samples is predicted from a linear combination of the previous `ORDER` samples. Coefficients are computed via autocorrelation + Levinson-Durbin, then quantized to integers.
    - In both cases the predictor output is ZigZag-encoded before entropy coding.
 
-2. **Entropy Coding** (currently only one option):
-   - **Arithmetic Range Coder** with adaptive byte models (for Delta) or slot+bits models (for LPC coefficients and residuals).
+2. **Entropy Coding** (selectable):
+   - **Arithmetic Range Coder** with adaptive models — better compression, slower.
+   - **Golomb-Rice Coder** — 1.5–2× faster with a small size overhead (1–3 pp). The Rice parameter `k` is chosen per block by exhaustive search over the bit cost.
 
-The architecture is designed to be extensible: `audio_encoder` and `audio_decoder` accept parameters for predictor and entropy method. Future plans include a Rice coder and a unified coder interface.
+The architecture is modular: `audio_encoder` and `audio_decoder` accept both predictor and entropy method as parameters, so any combination of `{Delta, LPC} × {Range, Rice}` can be selected from the CLI.
 
 ## Features
 
 - Pure C11, no external runtime dependencies.
 - Streaming WAV parser (supports 16/24/32-bit PCM, mono/stereo).
 - Custom `.notflac` container format with an on-disk **seek table**.
-- CLI for compression/decompression.
+- CLI for compression/decompression with selectable predictor and entropy coder.
 - Streaming player (pipes raw PCM to stdout) with **seek by seconds** (`start_sec`, `end_sec`).
 - Automated round-trip benchmarks.
 
 ## Benchmarks
 
-Comparison against reference lossless codecs on two test files: `wav.wav` (16-bit / 16 kHz / mono) and `24bit-96khz.wav` (24-bit / 96 kHz / stereo). All times measured on WSL2 (single core). Lower ratio = better.
+Comparison against reference lossless codecs. All times measured on WSL2 (single core). Lower ratio = better.
 
-```
-24bit-96khz.wav                  flac       17280316    7750479   44.85% .601007536s
-24bit-96khz.wav                  wavpack    17280316    8059396   46.63% .342791494s
-24bit-96khz.wav                  alac       17280316    8400415   48.61% 1.471391168s
-24bit-96khz.wav                  notflac    17280316    8731002   50.52% .951504023s
+**`wav.wav` — 16-bit / 16 kHz / mono (320 KB)**
 
-wav.wav                          flac         320078     120962   37.79% .019811397s
-wav.wav                          wavpack      320078     139846   43.69% .017895038s
-wav.wav                          alac         320078     168489   52.63% .132017954s
-wav.wav                          notflac      320078     186800   58.36% .032965135s
-```
+| Codec | Original | Compressed | Ratio | Time |
+|---|---:|---:|---:|---:|
+| flac | 320078 | 120962 | 37.79% | 0.023 s |
+| wavpack | 320078 | 139846 | 43.69% | 0.028 s |
+| alac | 320078 | 168489 | 52.63% | 0.223 s |
+| notflac LPC+Rice | 320078 | 192519 | 60.14% | 0.030 s |
+| notflac LPC+Range | 320078 | 186800 | 58.36% | 0.043 s |
+| notflac Delta+Rice | 320078 | 239878 | 74.94% | 0.021 s |
+| notflac Delta+Range | 320078 | 240241 | 75.05% | 0.046 s |
+
+**`16bit-44.1kHz-mono.wav` — 16-bit / 44.1 kHz / mono (158 MB)**
+
+| Codec | Original | Compressed | Ratio | Time |
+|---|---:|---:|---:|---:|
+| flac | 158598386 | 60440009 | 38.10% | 5.40 s |
+| wavpack | 158598386 | 65872640 | 41.53% | 7.25 s |
+| alac | 158598386 | 71386487 | 45.01% | 15.39 s |
+| notflac LPC+Rice | 158598386 | 87079402 | 54.90% | 9.25 s |
+| notflac LPC+Range | 158598386 | 83375613 | 52.57% | 15.45 s |
+| notflac Delta+Rice | 158598386 | 104787254 | 66.07% | 5.76 s |
+| notflac Delta+Range | 158598386 | 102579338 | 64.67% | 15.17 s |
+
+**`24bit-96khz.wav` — 24-bit / 96 kHz / stereo (17 MB)**
+
+| Codec | Original | Compressed | Ratio | Time |
+|---|---:|---:|---:|---:|
+| flac | 17280316 | 7750479 | 44.85% | 0.87 s |
+| wavpack | 17280316 | 8059396 | 46.63% | 0.62 s |
+| alac | 17280316 | 8400415 | 48.61% | 1.83 s |
+| notflac LPC+Rice | 17280316 | 9185115 | 53.15% | 0.81 s |
+| notflac LPC+Range | 17280316 | 8731002 | 50.52% | 1.63 s |
+| notflac Delta+Rice | 17280316 | 13716104 | 79.37% | 0.54 s |
+| notflac Delta+Range | 17280316 | 13630419 | 78.87% | 2.05 s |
 
 **Observations:**
-- On the 24-bit stereo file, not-FLAC is within ~6% of FLAC but trails ALAC by ~2%. WavPack and ALAC remain competitive.
-- On the small 16-bit mono file, not-FLAC trails FLAC significantly — mostly due to fixed LPC order and range coder which is worse than Rice Coding. Both are on the roadmap.
-- WavPack consistently outperforms not-FLAC on both files. FLAC remains the reference.
+- **Rice is 1.5–2× faster than Range** on every file, at the cost of 1–3 pp in compression ratio. That is the same trade-off FLAC makes, and it is the main reason Rice is the default entropy coder.
+- On `24bit-96khz.wav`, **LPC+Rice is slightly faster than FLAC** (0.81 s vs 0.87 s) while trailing by ~8 pp in ratio.
+- On `16bit-44.1kHz-mono.wav`, LPC+Rice is ~1.7× slower than FLAC and ~16.8 pp worse. The gap is mostly due to **fixed LPC order** (FLAC adapts it per block) and **unpartitioned Rice** — both are on the roadmap.
+- **Delta is consistently worse than LPC** on all files; LPC is the default predictor.
 
-### LPC vs Delta (internal comparison)
+### LPC vs Delta (internal comparison, LPC+Rice)
 
-| File | Delta ratio | LPC ratio | LPC gain |
-|------|------------:|----------:|---------:|
-| `wav.wav` | 75.1% | **58.4%** | **22.2% smaller** |
-| `24bit-96khz.wav` | 78.9% | **50.5%** | **35.9% smaller** |
-
-Switching from Delta to LPC cuts the output size by 22–36% on the same data.
+| File | Delta+Rice ratio | LPC+Rice ratio | LPC gain |
+|------|-----------------:|---------------:|---------:|
+| `wav.wav` | 74.94% | **60.14%** | **14.8% smaller** |
+| `16bit-44.1kHz-mono.wav` | 66.07% | **54.90%** | **11.2% smaller** |
+| `24bit-96khz.wav` | 79.37% | **53.15%** | **26.2% smaller** |
 
 ## Build
 
@@ -73,14 +98,20 @@ cmake --build .
 ### CLI
 
 ```bash
-# Compress WAV to notflac (default: LPC predictor)
+# Compress WAV to notflac (default: LPC + Rice)
 ./build/notflac compress input.wav output.notflac
 
-# Explicit LPC (predictor=1, same as default)
-./build/notflac compress input.wav output.notflac 1
+# Explicit LPC + Rice (same as default)
+./build/notflac compress input.wav output.notflac 1 1
 
-# Delta predictor (predictor=0)
-./build/notflac compress input.wav output.notflac 0
+# LPC + Range (slower, slightly better compression)
+./build/notflac compress input.wav output.notflac 1 0
+
+# Delta + Rice (fastest, worst compression)
+./build/notflac compress input.wav output.notflac 0 1
+
+# Delta + Range
+./build/notflac compress input.wav output.notflac 0 0
 
 # Decompress notflac to WAV
 ./build/notflac decompress output.notflac restored.wav
@@ -88,7 +119,7 @@ cmake --build .
 
 Arguments after the output path:
 - `predictor`: `0` = Delta, `1` = LPC (**default: 1**).
-- `entropy`: `0` = Range Coder (**default: 0**, only supported value).
+- `entropy`: `0` = Range Coder, `1` = Rice Coder (**default: 1**).
 
 ### Tests
 
@@ -96,7 +127,7 @@ Arguments after the output path:
 ./build/test_notflac_roundtrip
 ```
 
-The benchmark scans `tests/data/`, compresses/decompresses every `.wav`, prints size and time for both predictors, and verifies a bit-exact LPC round-trip. Drop your own `.wav` files into `tests/data/` to include them.
+The benchmark scans `tests/data/`, compresses/decompresses every `.wav` for all four `{predictor} × {entropy}` combinations, prints size and time, and verifies a bit-exact round-trip. Drop your own `.wav` files into `tests/data/` to include them.
 
 ### Streaming Player
 
@@ -119,14 +150,15 @@ Examples:
 ./build/notflac_player out.notflac 3 5 | <player>
 ```
 
-Because the output is **raw PCM**, the downstream tool (e.g. aplay, paplay, etc.) must be told the exact format (sample rate, channel count, bit depth). `notflac_player` prints these on startup to **stderr**, so you can read them and pick the right flags.
+Because the output is **raw PCM**, the downstream tool (e.g. `aplay`, `paplay`, `sox`) must be told the exact format (sample rate, channel count, bit depth). `notflac_player` prints these on startup to **stderr**, so you can read them and pick the right flags.
 
-player launch example:
+Player launch examples:
+
 ```bash
-#16 bit mono 16 kHz
+# 16-bit mono 16 kHz
 ./build/notflac_player out.notflac | paplay --raw --format=s16le --rate=16000 --channels=1
 
-#24 bit stereo 96 kHz
+# 24-bit stereo 96 kHz
 ./build/notflac_player out.notflac | paplay --raw --format=s24_3le --rate=96000 --channels=2
 ```
 
@@ -139,8 +171,8 @@ All multi-byte integers are **little-endian**.
 | Offset | Size | Field              | Notes                                             |
 |--------|------|--------------------|---------------------------------------------------|
 | 0      | 4    | `magic`            | `0x4E464C41` (`"NFLA"`)                           |
-| 4      | 1    | `version`          | currently `2`                                     |
-| 5      | 1    | `entropy_method`   | `0` = Range Coder                                 |
+| 4      | 1    | `version`          | currently `3`                                     |
+| 5      | 1    | `entropy_method`   | `0` = Range Coder, `1` = Rice Coder               |
 | 6      | 1    | `predictor_method` | `0` = Delta, `1` = LPC                            |
 | 7      | 1    | `reserved`         | `0`                                               |
 | 8      | 4    | `sample_rate`      | Hz, e.g. 44100                                    |
@@ -155,16 +187,20 @@ All multi-byte integers are **little-endian**.
 
 ### Body
 
-For each block, in file order, one **independent Range Coder stream** is emitted (the coder is created, flushed and destroyed per block). Blocks are self-contained, which is what makes O(1) seeking possible.
+For each block, in file order, one **independent entropy stream** is emitted (the coder is created, flushed and destroyed per block). Blocks are self-contained, which is what makes O(1) seeking possible.
 
-**Delta mode (`predictor_method == 0`):** for each of the block's samples, the encoder writes `zigzag(sample - prev_sample)` using the per-byte adaptive models. `prev_sample` is reset to `0` at the start of every block.
+**Delta mode (`predictor_method == 0`):**
+- With **Range** (`entropy_method == 0`): each residual `zigzag(sample - prev_sample)` is written through the per-byte adaptive models.
+- With **Rice** (`entropy_method == 1`): the block starts with a 1-byte Rice parameter `k`, followed by all residuals coded as `unary(q) + k bits(r)`, where `z = zigzag(sample - prev_sample)`, `q = z >> k`, `r = z & ((1 << k) - 1)`.
+- `prev_sample` is reset to `0` at the start of every block.
 
-**LPC mode (`predictor_method == 1`):** each block's stream contains, in order:
+**LPC mode (`predictor_method == 1`):** each block contains, in order:
 1. `precision` — right-shift applied to quantized LPC coefficients.
 2. `quotients[order]` — quantized coefficients.
-3. `residuals[block_size]` — per-sample residuals.
+3. For Rice only: `k` — 1-byte Rice parameter.
+4. `residuals[block_size]` — per-sample residuals.
 
-The first `order` residuals of every block are the **raw samples** (no history yet). History does not carry across block boundaries; every block is decoded independently.
+`precision` and `quotients` go through the Range models when `entropy_method == 0`, and are written raw (1 + `4 × order` bytes) when `entropy_method == 1`. The first `order` residuals of every block are the **raw samples** (no history yet). History does not carry across block boundaries; every block is decoded independently.
 
 ### Seek table
 
@@ -172,7 +208,7 @@ Located at `table_offset`, immediately after the body. One entry per block, each
 
 | Size | Field          | Notes                                                    |
 |------|----------------|----------------------------------------------------------|
-| 8    | `block_offset` | absolute file offset of the block's Range Coder stream    |
+| 8    | `block_offset` | absolute file offset of the block's entropy stream        |
 | 4    | `block_size`   | samples in this block (last block may be < header's `block_size`) |
 
 With the seek table, `notflac_player` can jump straight to any block: `fseek(block_offset[i])`, create a fresh decoder, decode. No need to decode earlier blocks.
@@ -181,17 +217,20 @@ With the seek table, `notflac_player` can jump straight to any block: `fseek(blo
 
 - [X] Add **LPC**
 - [X] **Seek support**: on-disk seek table + `notflac_player <file> [start_sec] [end_sec]`
-- [X] **Architecture refactoring**: unify predictors under a single `predictor_t` interface (currently `encode_audio` branches on `predictor_method`), and unify entropy coders under a single `entropy_coder_t` interface so Range Coder and future Rice Coder are interchangeable.
-- [ ] **Persistent entropy models**: stop resetting adaptive models at every block boundary; add a reset interval so models warm up once and stay warm (biggest single compression win, especially on short files). Requires decoding from the last reset point on seek.
-- [ ] Add **Rice Coding** for faster entropy coding (comparable to FLAC's speed advantage).
-- [ ] Enhance **LPC** with adaptive order.
-- [ ] **Mid/Side stereo** decorrelation (5–10% win on stereo).
-- [ ] Optional: simple cross-platform GUI in Python (PySide6 or Tkinter) wrapping the CLI — planned as a thin frontend, not part of the C codebase.
+- [X] **Architecture refactoring**: unify predictors under a single `predictor_t` interface and entropy coders under a single `entropy_coder_t` interface
+- [X] Add **Rice Coding** for faster entropy coding
+- [ ] **Partitioned Rice**: split each block into `2^p` partitions, one `k` per partition
+- [ ] Enhance **LPC** with adaptive order
+- [ ] **Mid/Side stereo** decorrelation
+- [ ] **Persistent entropy models**: stop resetting adaptive models at every block boundary (Range only, incompatible with O(1) seek)
+- [ ] Optional: simple cross-platform GUI in Python (PySide6 or Tkinter) wrapping the CLI
 
 ## Notes
 
-- The initial CMake boilerplate and the tests were generated with the help of an LLM (DeepSeek-V3). All core algorithms (Range Coder, WAV parser, Delta+ZigZag, LPC with autocorrelation and Levinson-Durbin, audio encoder/decoder) were written by me.
+- The initial CMake boilerplate and the tests were generated with the help of an LLM (DeepSeek-V3). All core algorithms (Range Coder, Rice Coder, WAV parser, Delta+ZigZag, LPC with autocorrelation and Levinson-Durbin, audio encoder/decoder) were written by me.
+- The `.notflac` format is **little-endian**. Files are portable across x86-64 and ARM64 (both little-endian), but not to big-endian systems. The WAV parser uses `long` for file offsets, so WAV files larger than 2 GB may not open on 32-bit systems. For typical desktop and mobile platforms this is a non-issue.
 
 ## Updates
 
-* **v0.2** — LPC predictor (autocorrelation, Levinson-Durbin, coefficient quantization, block-wise encoding) improves compression over Delta by **20–37%** on test files. Also adds **seek support**: on-disk seek table, per-block Range Coder streams, and `notflac_player <file> [start_sec] [end_sec]` for O(1) random access.
+* **v0.2** — LPC predictor (autocorrelation, Levinson-Durbin, coefficient quantization, block-wise encoding) improves compression over Delta by 20–37% on test files. Also adds **seek support**: on-disk seek table, per-block entropy streams, and `notflac_player <file> [start_sec] [end_sec]` for O(1) random access.
+* **v0.3** — **Rice coder** added as a second entropy method, selectable from the CLI (`0` = Range, `1` = Rice). Rice is 1.5–2× faster than Range at the cost of 1–3 pp in ratio. File format version bumped to `3`; the block header now starts with a 1-byte Rice parameter `k` when `entropy_method == 1`.

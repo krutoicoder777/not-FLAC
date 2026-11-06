@@ -34,9 +34,6 @@ static int test_file(const char *path)
     {
         return 0;
     }
-    char comp_lpc[512 + 32], comp_delta[512 + 32];
-    snprintf(comp_lpc, sizeof(comp_lpc), "%s.lpc.notflac", path);
-    snprintf(comp_delta, sizeof(comp_delta), "%s.delta.notflac", path);
 
     long original_size = get_file_size(path);
     if (original_size <= 0)
@@ -45,112 +42,120 @@ static int test_file(const char *path)
         return 0;
     }
 
-    double start = get_time();
-    int res_lpc = encode_audio(PREDICTOR_LPC, ENTROPY_RANGE_CODER, path, comp_lpc);
-    double lpc_time = get_time() - start;
-    long lpc_size = get_file_size(comp_lpc);
+    printf("  [FILE] %s (%ld B)\n", path, original_size);
 
-    start = get_time();
-    int res_delta = encode_audio(PREDICTOR_DELTA, ENTROPY_RANGE_CODER, path, comp_delta);
-    double delta_time = get_time() - start;
-    long delta_size = get_file_size(comp_delta);
+    struct {
+        const char *name;
+        predictor_method_t pred;
+        entropy_method_t ent;
+    } combos[] = {
+        {"LPC+Rice",    PREDICTOR_LPC,   ENTROPY_RICE_CODER},
+        {"LPC+Range",   PREDICTOR_LPC,   ENTROPY_RANGE_CODER},
+        {"Delta+Rice",  PREDICTOR_DELTA, ENTROPY_RICE_CODER},
+        {"Delta+Range", PREDICTOR_DELTA, ENTROPY_RANGE_CODER},
+    };
+    int n_combos = (int)(sizeof(combos) / sizeof(combos[0]));
+    int total_errors = 0;
 
-    if (res_lpc != OK || res_delta != OK)
+    for (int c = 0; c < n_combos; c++)
     {
-        printf("  [FAIL] %s (encode error)\n", path);
-        remove(comp_lpc);
-        remove(comp_delta);
-        return 1;
-    }
+        char comp[512 + 32];
+        snprintf(comp, sizeof(comp), "%s.%d_%d.notflac", path, (int)combos[c].pred, (int)combos[c].ent);
 
-    double lpc_ratio = (double)lpc_size / original_size * 100.0;
-    double delta_ratio = (double)delta_size / original_size * 100.0;
-    double improvement = (double)(delta_size - lpc_size) / delta_size * 100.0;
+        double start = get_time();
+        int res = encode_audio(combos[c].pred, combos[c].ent, path, comp);
+        double enc_time = get_time() - start;
+        long comp_size = get_file_size(comp);
 
-    printf("  [OK] %s\n", path);
-    printf("       Original: %ld B\n", original_size);
-    printf("       LPC:   %ld B (%.1f%%) | C: %.3fs\n", lpc_size, lpc_ratio, lpc_time);
-    printf("       Delta: %ld B (%.1f%%) | C: %.3fs\n", delta_size, delta_ratio, delta_time);
-    printf("       LPC vs Delta: %.1f%% smaller\n", improvement);
+        if (res != OK || comp_size <= 0)
+        {
+            printf("    [FAIL] %-12s encode error\n", combos[c].name);
+            remove(comp);
+            total_errors++;
+            continue;
+        }
 
-    // Round-trip LPC
-    int errors = 0;
-    FILE *in = fopen(comp_lpc, "rb");
-    if (!in)
-    {
-        printf("  [FAIL] cannot open %s\n", comp_lpc);
-        remove(comp_lpc);
-        remove(comp_delta);
-        return 1;
-    }
-    audio_decoder_t *dec = audio_decoder_open(in);
-    if (!dec)
-    {
-        printf("  [FAIL] audio_decoder_open failed\n");
-        fclose(in);
-        remove(comp_lpc);
-        remove(comp_delta);
-        return 1;
-    }
-    wav_stream_t *ws = wav_stream_open(path);
-    if (!ws)
-    {
-        printf("  [FAIL] wav_stream_open failed\n");
+        double ratio = (double)comp_size / original_size * 100.0;
+
+        FILE *in = fopen(comp, "rb");
+        if (!in)
+        {
+            printf("    [FAIL] %-12s cannot open\n", combos[c].name);
+            remove(comp);
+            total_errors++;
+            continue;
+        }
+        audio_decoder_t *dec = audio_decoder_open(in);
+        if (!dec)
+        {
+            printf("    [FAIL] %-12s decoder open failed\n", combos[c].name);
+            fclose(in);
+            remove(comp);
+            total_errors++;
+            continue;
+        }
+        wav_stream_t *ws = wav_stream_open(path);
+        if (!ws)
+        {
+            printf("    [FAIL] %-12s wav open failed\n", combos[c].name);
+            audio_decoder_close(dec);
+            fclose(in);
+            remove(comp);
+            total_errors++;
+            continue;
+        }
+
+        int errors = 0;
+        uint32_t n = audio_decoder_num_samples(dec);
+        uint32_t n_orig = wav_stream_num_samples(ws);
+        if (n != n_orig)
+        {
+            printf("    [FAIL] %-12s num_samples %u vs %u\n", combos[c].name, n, n_orig);
+            errors++;
+        }
+        else
+        {
+            for (uint32_t i = 0; i < n; i++)
+            {
+                int32_t s_dec, s_orig;
+                if (audio_decode_next(dec, &s_dec) != 0)
+                {
+                    if (errors < 1) printf("    [FAIL] %-12s decode_next at %u\n", combos[c].name, i);
+                    errors++;
+                    break;
+                }
+                if (wav_stream_next_sample(ws, &s_orig) != WAV_OK)
+                {
+                    if (errors < 1) printf("    [FAIL] %-12s wav_stream at %u\n", combos[c].name, i);
+                    errors++;
+                    break;
+                }
+                if (s_dec != s_orig)
+                {
+                    if (errors < 1) printf("    [FAIL] %-12s mismatch at %u: %d vs %d\n", combos[c].name, i, s_dec, s_orig);
+                    errors++;
+                }
+            }
+        }
+
+        wav_stream_close(ws);
         audio_decoder_close(dec);
         fclose(in);
-        remove(comp_lpc);
-        remove(comp_delta);
-        return 1;
-    }
+        remove(comp);
 
-    uint32_t n = audio_decoder_num_samples(dec);
-    uint32_t n_orig = wav_stream_num_samples(ws);
-    if (n != n_orig)
-    {
-        printf("  [FAIL] num_samples mismatch: %u vs %u\n", n, n_orig);
-        errors++;
-    }
-    else
-    {
-        for (uint32_t i = 0; i < n; i++)
+        if (errors == 0)
         {
-            int32_t s_dec, s_orig;
-            if (audio_decode_next(dec, &s_dec) != 0)
-            {
-                if (errors < 3) fprintf(stderr, "  [FAIL] decode_next at %u\n", i);
-                errors++;
-                break;
-            }
-            if (wav_stream_next_sample(ws, &s_orig) != WAV_OK)
-            {
-                if (errors < 3) fprintf(stderr, "  [FAIL] wav_stream at %u\n", i);
-                errors++;
-                break;
-            }
-            if (s_dec != s_orig)
-            {
-                if (errors < 3) fprintf(stderr, "  [FAIL] mismatch at %u: %d vs %d\n", i, s_dec, s_orig);
-                errors++;
-            }
+            printf("    [OK]   %-12s %7ld B (%5.1f%%) | E: %.3fs\n",
+                   combos[c].name, comp_size, ratio, enc_time);
+        }
+        else
+        {
+            printf("    [FAIL] %-12s round-trip (%d errors)\n", combos[c].name, errors);
+            total_errors++;
         }
     }
 
-    wav_stream_close(ws);
-    audio_decoder_close(dec);
-    fclose(in);
-
-    if (errors == 0)
-    {
-        printf("       Round-trip: SUCCESS\n");
-    }
-    else
-    {
-        printf("       Round-trip: FAILED (%d errors)\n", errors);
-    }
-
-    remove(comp_lpc);
-    remove(comp_delta);
-    return errors > 0;
+    return total_errors > 0;
 }
 
 int main(void)

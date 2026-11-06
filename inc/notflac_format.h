@@ -2,7 +2,7 @@
 #define NOTFLAC_FORMAT_H__
 
 #define NOTFLAC_MAGIC 0x4E464C41
-#define NOTFLAC_VERSION 3
+#define NOTFLAC_VERSION 4
 #define NOTFLAC_HEADER_SIZE 20
 
 #define OFFSET_OF_TABLE_OFFSET_IN_HEADER 24
@@ -20,6 +20,6 @@ typedef enum
 } predictor_method_t;
 
 #define BLOCK_SIZE 4096
-#define LPC_ORDER 16
+#define LPC_ORDER_MAX 16
 
 #endif

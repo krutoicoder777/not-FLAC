@@ -25,6 +25,7 @@ struct audio_decoder
 
     uint64_t *blocks_offset;
     uint32_t *blocks_size;
+	int lpc_order;
 
     predictor_decoder_t *pd;
     entropy_decoder_t *ed;
@@ -79,8 +80,9 @@ audio_decoder_t *audio_decoder_open(FILE *in)
     {
         if (fread(&order, 4, 1, in) != 1)
             goto fail;
-        if (order != LPC_ORDER)
-            goto fail;
+		if (order != 8 && order != 12 && order != 16)
+			goto fail;
+		dec->lpc_order = order;
     }
 
     dec->entropy = (entropy_method_t)entropy;
@@ -187,7 +189,7 @@ int audio_decoder_seek_block(audio_decoder_t *dec, uint32_t block_index)
     uint32_t actual_samples = dec->blocks_size[block_index];
     if (dec->predictor == PREDICTOR_LPC)
     {
-        dec->pd = predictor_decoder_create_lpc(LPC_ORDER, dec->block_size);
+        dec->pd = predictor_decoder_create_lpc(dec->lpc_order, dec->block_size);
     }
     else
     {
@@ -228,9 +230,9 @@ const int32_t *audio_decoder_decode_block(audio_decoder_t *dec, int *cur_samples
 
     if (dec->predictor == PREDICTOR_LPC)
     {
-        int32_t quotients[LPC_ORDER];
+        int32_t quotients[LPC_ORDER_MAX];
         uint8_t precision = entropy_decode_precision(dec->ed);
-        for (int j = 0; j < LPC_ORDER; j++)
+        for (int j = 0; j < dec->lpc_order; j++)
         {
             quotients[j] = entropy_decode_quotient(dec->ed);
         }

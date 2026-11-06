@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include "rice_coder.h"
 
-#define MAX_P 6
+#define MAX_P 4
 #define MAX_K 1 << MAX_P
 
 typedef struct rice_coder rice_coder_t;

@@ -9,6 +9,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static int pick_order(uint32_t sample_rate)
+{
+    if (sample_rate <= 24000) return 8;
+    if (sample_rate <= 48000) return 12;
+    return 16;
+}
+
 static int write_nf_header(FILE *out, wav_block_reader_t *wb, predictor_method_t predictor, entropy_method_t entropy)
 {
     uint32_t num_samples = wav_block_reader_num_samples(wb);
@@ -45,7 +52,7 @@ static int write_nf_header(FILE *out, wav_block_reader_t *wb, predictor_method_t
 
     if (predictor == PREDICTOR_LPC)
     {
-        uint32_t order = LPC_ORDER;
+        uint32_t order = pick_order(sample_rate);
         fwrite(&order, 4, 1, out);
     }
     return OK;
@@ -80,6 +87,8 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
         return rc;
     }
     const int16_t bps = wav_block_reader_bits_per_sample(wb);
+	uint32_t sample_rate = wav_block_reader_sample_rate(wb);
+	int order = pick_order(sample_rate);
     predictor_encoder_t *pe;
     entropy_encoder_t *enc = NULL;
     const int32_t *block;
@@ -126,7 +135,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
         }
         if (predictor == PREDICTOR_LPC)
         {
-            pe = predictor_encoder_create_lpc(LPC_ORDER, block_size);
+            pe = predictor_encoder_create_lpc(order, block_size);
         }
         else if (predictor == PREDICTOR_DELTA)
         {
@@ -178,7 +187,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
             quotients = predictor_encoder_quotients(pe);
             precision = predictor_encoder_precision(pe);
             entropy_encode_precision(enc, precision);
-            for (size_t j = 0; j < LPC_ORDER; j++)
+            for (size_t j = 0; j < order; j++)
             {
                 entropy_encode_quotient(enc, quotients[j]);
             }

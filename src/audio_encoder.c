@@ -16,6 +16,12 @@ static int pick_order(uint32_t sample_rate)
     return 16;
 }
 
+static int pick_block_size(uint32_t sample_rate, uint16_t channels)
+{
+	// if (sample_rate <= 48000) return 8192 * channels;
+	return 8192 * 2 * channels;
+}
+
 static int write_nf_header(FILE *out, wav_block_reader_t *wb, predictor_method_t predictor, entropy_method_t entropy)
 {
     uint32_t num_samples = wav_block_reader_num_samples(wb);
@@ -44,7 +50,7 @@ static int write_nf_header(FILE *out, wav_block_reader_t *wb, predictor_method_t
     fwrite(&bits, 2, 1, out);
     fwrite(&num_samples, 4, 1, out);
 
-    uint32_t block_size = BLOCK_SIZE;
+    uint32_t block_size = pick_block_size(sample_rate, channels);
     fwrite(&block_size, 4, 1, out);
 
     uint64_t table_offset = 0;
@@ -78,7 +84,13 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
         wav_block_reader_destroy(wb);
         return ERR_IO;
     }
-
+	uint32_t file_block_size = pick_block_size(wav_block_reader_sample_rate(wb), wav_block_reader_channels(wb));
+	wav_block_reader_destroy(wb);
+	wb = wav_block_reader_create(in_path, file_block_size);
+	if (!wb)
+	{
+		return ERR_MEM;
+	}
     int rc = write_nf_header(out, wb, predictor, entropy);
     if (rc != OK)
     {
@@ -126,7 +138,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
         {
             break;
         }
-        if (block_size != BLOCK_SIZE && i != num_blocks - 1)
+        if (block_size != file_block_size && i != num_blocks - 1)
         {
             free(blocks_offset);
             wav_block_reader_destroy(wb);
@@ -215,7 +227,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
     for (size_t i = 0; i < num_blocks; i++)
     {
         fwrite(&blocks_offset[i], 8, 1, out);
-        uint32_t bsize = (i == num_blocks - 1) ? block_size : BLOCK_SIZE;
+        uint32_t bsize = (i == num_blocks - 1) ? block_size : file_block_size;
         fwrite(&bsize, 4, 1, out);
     }
 

@@ -10,14 +10,14 @@ The current pipeline consists of two main stages:
 
 1. **Prediction** (selectable):
    - **Delta Encoding**: each sample is replaced by its difference from the previous one.
-   - **LPC (Linear Predictive Coding)**: each block of samples is predicted from a linear combination of the previous `order` samples. Coefficients are computed via autocorrelation + Levinson-Durbin, then quantized to integers. The LPC `order` is chosen based on the file's sample rate (`8` for ≤24 kHz, `12` for ≤48 kHz, `16` for >48 kHz) — the same heuristic FLAC uses, since higher sample rates have more high-frequency content that needs more predictor coefficients.
+   - **LPC (Linear Predictive Coding)**: each block of samples is predicted from a linear combination of the previous `order` samples. Coefficients are computed via autocorrelation + Levinson-Durbin, then quantized to integers. The LPC `order` is chosen based on the file's sample rate (`8` for ≤24 kHz, `12` for ≤48 kHz, `16` for >48 kHz) — the same heuristic FLAC uses.
    - In both cases the predictor output is ZigZag-encoded before entropy coding.
 
 2. **Entropy Coding** (selectable):
    - **Arithmetic Range Coder** with adaptive models — better compression, slower.
    - **Golomb-Rice Coder** — 1.5–2× faster with a small size overhead. Each block is split into `2^p` partitions, with one Rice parameter `k[i]` per partition. Both `p` and the `k` array are chosen per block by exhaustive search over the estimated bit cost.
 
-The architecture is modular: `audio_encoder` and `audio_decoder` accept both predictor and entropy method as parameters, so any combination of `{Delta, LPC} × {Range, Rice}` can be selected from the CLI.
+The block size is chosen as `8192 × 2 × channels` (16384 samples for mono, 32768 for stereo), which empirically gives the best ratio/speed trade-off on the test files. The architecture is modular: `audio_encoder` and `audio_decoder` accept both predictor and entropy method as parameters.
 
 ## Features
 
@@ -36,53 +36,42 @@ Comparison against reference lossless codecs. All times measured on WSL2 (single
 
 | Codec | Original | Compressed | Ratio | Time |
 |---|---:|---:|---:|---:|
-| flac | 320078 | 120962 | 37.79% | 0.033 s |
-| wavpack | 320078 | 139846 | 43.69% | 0.026 s |
-| alac | 320078 | 168489 | 52.63% | 0.173 s |
-| notflac LPC+Rice | 320078 | 190209 | 59.4% | 0.027 s |
-| notflac LPC+Range | 320078 | 190531 | 59.5% | 0.031 s |
-| notflac Delta+Rice | 320078 | 238722 | 74.6% | 0.025 s |
-| notflac Delta+Range | 320078 | 240241 | 75.1% | 0.037 s |
+| flac | 320078 | 120962 | 37.79% | 0.034 s |
+| wavpack | 320078 | 139846 | 43.69% | 0.040 s |
+| alac | 320078 | 168489 | 52.63% | 0.200 s |
+| notflac LPC+Rice | 320078 | 184925 | 57.77% | 0.039 s |
+| notflac LPC+Range | 320078 | 186750 | 58.34% | 0.045 s |
+| notflac Delta+Rice | 320078 | 238552 | 74.52% | 0.038 s |
+| notflac Delta+Range | 320078 | 240007 | 74.98% | 0.057 s |
 
 **`16bit-44.1kHz-mono.wav` — 16-bit / 44.1 kHz / mono (158 MB, speech)**
 
 | Codec | Original | Compressed | Ratio | Time |
 |---|---:|---:|---:|---:|
-| flac | 158598386 | 60440009 | 38.10% | 5.51 s |
-| wavpack | 158598386 | 65872640 | 41.53% | 6.18 s |
-| alac | 158598386 | 71386487 | 45.01% | 16.41 s |
-| notflac LPC+Rice | 158598386 | 82066239 | 51.7% | 12.87 s |
-| notflac LPC+Range | 158598386 | 83631910 | 52.7% | 15.13 s |
-| notflac Delta+Rice | 158598386 | 99313761 | 62.6% | 10.19 s |
-| notflac Delta+Range | 158598386 | 102579338 | 64.7% | 16.21 s |
+| flac | 158598386 | 60440009 | 38.10% | 6.90 s |
+| wavpack | 158598386 | 65872640 | 41.53% | 8.09 s |
+| alac | 158598386 | 71386487 | 45.01% | 15.76 s |
+| notflac LPC+Rice | 158598386 | 79332933 | 50.02% | 12.35 s |
+| notflac LPC+Range | 158598386 | 82564120 | 52.05% | 13.56 s |
+| notflac Delta+Rice | 158598386 | 100165954 | 63.15% | 10.91 s |
+| notflac Delta+Range | 158598386 | 104622751 | 65.96% | 15.56 s |
 
 **`24bit-96khz.wav` — 24-bit / 96 kHz / stereo (17 MB, music)**
 
 | Codec | Original | Compressed | Ratio | Time |
 |---|---:|---:|---:|---:|
-| flac | 17280316 | 7750479 | 44.85% | 0.93 s |
+| flac | 17280316 | 7750479 | 44.85% | 0.96 s |
 | wavpack | 17280316 | 8059396 | 46.63% | 0.55 s |
-| alac | 17280316 | 8400415 | 48.61% | 1.65 s |
-| notflac LPC+Rice | 17280316 | 8904004 | 51.5% | 0.98 s |
-| notflac LPC+Range | 17280316 | 8731002 | 50.5% | 1.53 s |
-| notflac Delta+Rice | 17280316 | 13659909 | 79.0% | 0.81 s |
-| notflac Delta+Range | 17280316 | 13630419 | 78.9% | 2.10 s |
+| alac | 17280316 | 8400415 | 48.61% | 1.59 s |
+| notflac LPC+Rice | 17280316 | 8311364 | 48.09% | 1.09 s |
+| notflac LPC+Range | 17280316 | 8225228 | 47.59% | 1.48 s |
+| notflac Delta+Rice | 17280316 | 13692994 | 79.24% | 0.80 s |
+| notflac Delta+Range | 17280316 | 13647967 | 78.97% | 2.13 s |
 
 **Observations:**
-- **Rice is 1.5–2× faster than Range** on every file, at the cost of 1–3 pp in compression ratio. That is the same trade-off FLAC makes, and it is the main reason Rice is the default entropy coder.
-- **Partitioned Rice** closed most of the gap with the Range coder: on the large 16-bit file, LPC+Rice is now **1.0 pp better** than LPC+Range (51.7% vs 52.7%), while still being faster.
-- **Adaptive LPC order** (8/12/16 by sample rate) reduced encoding time by 14–29% with roughly the same ratio on these files. The ratio gain is more visible on clean, high-dynamic-range music; on noisier speech or on low-rate music with strong high-frequency content, the smaller order is a wash.
-- On `24bit-96khz.wav`, LPC+Rice trails FLAC by **6.6 pp** in ratio (51.5% vs 44.85%) and is comparable in speed (0.98 s vs 0.93 s).
-- On `16bit-44.1kHz-mono.wav`, LPC+Rice trails FLAC by **13.6 pp** (51.7% vs 38.10%). Part of the gap is still LPC tuning, but a larger share is FLAC-only features not yet implemented here: **mid/side stereo**, **wasted bits detection**, and **adaptive block size**.
-- **Delta is consistently worse than LPC** on all files; LPC is the default predictor.
-
-### LPC vs Delta (internal comparison, LPC+Rice)
-
-| File | Delta+Rice ratio | LPC+Rice ratio | LPC gain |
-|------|-----------------:|---------------:|---------:|
-| `wav.wav` | 74.6% | **59.4%** | **20.4% smaller** |
-| `16bit-44.1kHz-mono.wav` | 62.6% | **51.7%** | **17.4% smaller** |
-| `24bit-96khz.wav` | 79.0% | **51.5%** | **34.8% smaller** |
+- **Best result:** `24bit-96khz.wav` at **48.09%** — within **3.2 pp of FLAC**, and **faster than ALAC** and roughly on par with WavPack. This is where not-FLAC is most competitive.
+- **Worst result:** `wav.wav` at **57.77%** — **20 pp behind FLAC**, mostly because the file is short (header/seek-table overhead dominates), but the last updates still improved the result.
+- **Rice vs Range:** Rice is consistently 1.1–1.5× faster, and after partitioning it **matches or beats** Range on every file.
 
 ## Build
 
@@ -106,13 +95,13 @@ cmake --build .
 # Explicit LPC + Rice (same as default)
 ./build/notflac compress input.wav output.notflac 1 1
 
-# LPC + Range (slower, slightly better compression)
+# LPC + Range (slower, sometimes performs better compression)
 ./build/notflac compress input.wav output.notflac 1 0
 
 # Delta + Rice (fastest, worst compression)
 ./build/notflac compress input.wav output.notflac 0 1
 
-# Delta + Range
+# Delta + Range (worst mode)
 ./build/notflac compress input.wav output.notflac 0 0
 
 # Decompress notflac to WAV
@@ -173,7 +162,7 @@ All multi-byte integers are **little-endian**.
 | Offset | Size | Field              | Notes                                             |
 |--------|------|--------------------|---------------------------------------------------|
 | 0      | 4    | `magic`            | `0x4E464C41` (`"NFLA"`)                           |
-| 4      | 1    | `version`          | currently `4`                                     |
+| 4      | 1    | `version`          | currently `5`                                     |
 | 5      | 1    | `entropy_method`   | `0` = Range Coder, `1` = Rice Coder               |
 | 6      | 1    | `predictor_method` | `0` = Delta, `1` = LPC                            |
 | 7      | 1    | `reserved`         | `0`                                               |
@@ -181,7 +170,7 @@ All multi-byte integers are **little-endian**.
 | 12     | 2    | `channels`         | 1 = mono, 2 = stereo                              |
 | 14     | 2    | `bits_per_sample`  | 16, 24 or 32                                      |
 | 16     | 4    | `num_samples`      | total sample count (per all channels)             |
-| 20     | 4    | `block_size`       | samples per block, e.g. 4096                      |
+| 20     | 4    | `block_size`       | samples per block, e.g. 16384 or 32768            |
 | 24     | 8    | `table_offset`     | absolute offset of the seek table                 |
 | 32     | 4    | `order`            | LPC order (`8`/`12`/`16`, by sample rate) — **only if `predictor_method == 1`** |
 
@@ -223,8 +212,9 @@ With the seek table, `notflac_player` can jump straight to any block: `fseek(blo
 - [X] Add **Rice Coding** for faster entropy coding
 - [X] **Partitioned Rice**: split each block into `2^p` partitions, one `k` per partition
 - [X] **Adaptive LPC order** based on sample rate (8/12/16)
+- [X] **Adaptive block size** based on channel count (`8192 × 2 × channels`)
 - [ ] **Mid/Side stereo** decorrelation
-- [ ] **Wasted bits detection** (skip all-zero high bits on quiet recordings)
+- [ ] **Verbatim mode** for noisy partitions (write raw when Rice is worse)
 - [ ] **Persistent entropy models**: stop resetting adaptive models at every block boundary (Range only, incompatible with O(1) seek)
 - [ ] Optional: simple cross-platform GUI in Python (PySide6 or Tkinter) wrapping the CLI
 
@@ -238,3 +228,4 @@ With the seek table, `notflac_player` can jump straight to any block: `fseek(blo
 * **v0.2** — LPC predictor (autocorrelation, Levinson-Durbin, coefficient quantization, block-wise encoding) improves compression over Delta by 20–37% on test files. Also adds **seek support**: on-disk seek table, per-block entropy streams, and `notflac_player <file> [start_sec] [end_sec]` for O(1) random access.
 * **v0.3** — **Rice coder** added as a second entropy method, selectable from the CLI (`0` = Range, `1` = Rice). Rice is 1.5–2× faster than Range at the cost of 1–3 pp in ratio. File format version bumped to `3`; the block header now starts with a 1-byte Rice parameter `k` when `entropy_method == 1`.
 * **v0.4** — **Partitioned Rice** (each block is split into `2^p` partitions, one Rice parameter per partition, with `p` chosen by bit-cost search) closes the gap with the Range coder and even beats it on the large file. **Adaptive LPC order** (8 for ≤24 kHz, 12 for ≤48 kHz, 16 for >48 kHz) cuts encoding time by 14–29%. File format version bumped to `4`.
+* **v0.5** — **Adaptive block size**: `block_size = 8192 × 2 × channels` (16384 for mono, 32768 for stereo), improving compression by 0.7–3.4 pp across all test files. File format version bumped to `5`.

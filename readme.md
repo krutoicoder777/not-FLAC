@@ -176,7 +176,7 @@ All multi-byte integers are **little-endian**.
 | Offset | Size | Field              | Notes                                             |
 |--------|------|--------------------|---------------------------------------------------|
 | 0      | 4    | `magic`            | `0x4E464C41` (`"NFLA"`)                           |
-| 4      | 1    | `version`          | currently `6`                                     |
+| 4      | 1    | `version`          | currently `7`                                     |
 | 5      | 1    | `entropy_method`   | `0` = Range Coder, `1` = Rice Coder               |
 | 6      | 1    | `predictor_method` | `0` = Delta, `1` = LPC                            |
 | 7      | 1    | `reserved`         | `0`                                               |

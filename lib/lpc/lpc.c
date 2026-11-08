@@ -118,6 +118,24 @@ static void levinson_durbin(const int64_t *r, int order, double *a)
     }
 }
 
+static uint64_t residual_cost(const int32_t *block, int n, int order,
+                              const int32_t *quotients, int precision)
+{
+    uint64_t cost = 0;
+    for (int i = order; i < n; i++)
+    {
+        int64_t pred = 0;
+        for (int j = 0; j < order; j++)
+        {
+            pred += (int64_t)quotients[j] * block[i - 1 - j];
+        }
+        int32_t hat = (int32_t)(pred >> precision);
+        int32_t res = block[i] - hat;
+        cost += (uint64_t)(res < 0 ? -(int64_t)res : res);
+    }
+    return cost;
+}
+
 void lpc_encoder_encode_block(lpc_encoder_t *enc, const int32_t *block, int count)
 {
     enc->current_block = block;
@@ -155,24 +173,44 @@ void lpc_encoder_encode_block(lpc_encoder_t *enc, const int32_t *block, int coun
             amax = v;
         }
     }
-    int S = 0;
+    int S_base = 0;
     if (amax > 0.0)
     {
-        S = 15 - 1 - (int)ceil(log2(amax));
-        if (S < 0)
+        S_base = 15 - 1 - (int)ceil(log2(amax));
+        if (S_base < 0) S_base = 0;
+        if (S_base > 15) S_base = 15;
+    }
+
+    int32_t tmp_q[32];
+    int best_S = S_base;
+    uint64_t best_cost = UINT64_MAX;
+
+    for (int dS = 0; dS <= 0; dS++)
+    {
+        int S = S_base + dS;
+        if (S < 0 || S > 15) continue;
+
+        for (int i = 0; i < enc->order; i++)
         {
-            S = 0;
+            tmp_q[i] = (int32_t)round(a[i] * (1 << S));
         }
-        if (S > 15)
+
+        uint64_t cost = residual_cost(block, count, enc->order, tmp_q, S);
+        cost += (uint64_t)enc->order * 32;
+
+        if (cost < best_cost)
         {
-            S = 15;
+            best_cost = cost;
+            best_S = S;
         }
     }
+
     for (int i = 0; i < enc->order; i++)
     {
-        enc->quotients[i] = (int32_t)round(a[i] * (1 << S));
+        enc->quotients[i] = (int32_t)round(a[i] * (1 << best_S));
     }
-    enc->precision = S;
+    enc->precision = best_S;
+
     free(a);
     free(r);
 }
@@ -261,7 +299,7 @@ static int32_t unzigzag(uint32_t z)
 
 int32_t lpc_decoder_decode_sample(lpc_decoder_t *dec, uint32_t zresidual)
 {
-	int32_t residual = unzigzag(zresidual);
+    int32_t residual = unzigzag(zresidual);
     int64_t pred = 0;
     if (dec->history_fill >= dec->order)
     {

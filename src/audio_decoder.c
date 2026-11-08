@@ -123,9 +123,11 @@ static int decode_one_stream(FILE *in, predictor_method_t predictor, entropy_met
     predictor_decoder_t *pd = NULL;
 
     if (entropy == ENTROPY_RICE_CODER)
-        ed = entropy_d_create_rice(in);
-    else
+        ed = entropy_d_create_rice(in, bits_per_sample);
+    else if (entropy == ENTROPY_RANGE_CODER)
         ed = entropy_d_create_range(in);
+	else
+		return ERR_ARGS;
     if (!ed) return ERR_MEM;
 
     if (entropy == ENTROPY_RICE_CODER)

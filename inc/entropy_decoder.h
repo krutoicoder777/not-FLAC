@@ -7,7 +7,7 @@
 typedef struct entropy_decoder entropy_decoder_t;
 
 entropy_decoder_t *entropy_d_create_range(FILE *in);
-entropy_decoder_t *entropy_d_create_rice(FILE *in);
+entropy_decoder_t *entropy_d_create_rice(FILE *in, uint16_t bits_per_sample);
 void entropy_d_destroy(entropy_decoder_t *dec);
 
 uint32_t entropy_decode_sample(entropy_decoder_t *dec);

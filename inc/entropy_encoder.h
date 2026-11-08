@@ -7,7 +7,7 @@
 typedef struct entropy_encoder entropy_encoder_t;
 
 entropy_encoder_t *entropy_create_range(FILE *out);
-entropy_encoder_t *entropy_create_rice(FILE *out);
+entropy_encoder_t *entropy_create_rice(FILE *out, uint16_t bits_per_sample);
 void entropy_destroy(entropy_encoder_t *enc);
 
 void entropy_encode_sample(entropy_encoder_t *enc, uint32_t sample); //sample is already zigzag`ed

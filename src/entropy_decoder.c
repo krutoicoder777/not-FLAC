@@ -43,7 +43,7 @@ entropy_decoder_t *entropy_d_create_range(FILE *in)
     return dec;
 }
 
-entropy_decoder_t *entropy_d_create_rice(FILE *in)
+entropy_decoder_t *entropy_d_create_rice(FILE *in, uint16_t bits_per_sample)
 {
     entropy_decoder_t *dec = malloc(sizeof(entropy_decoder_t));
     if (!dec)
@@ -52,7 +52,7 @@ entropy_decoder_t *entropy_d_create_rice(FILE *in)
     }
     dec->in = in;
     dec->range_d = NULL;
-    dec->rice_d = rice_decoder_create(in);
+    dec->rice_d = rice_decoder_create(in, bits_per_sample);
     if (!dec->rice_d)
     {
         free(dec);

@@ -111,7 +111,7 @@ static int encode_one_stream(FILE *out, predictor_method_t predictor, entropy_me
 
     if (entropy == ENTROPY_RICE_CODER)
     {
-        enc = entropy_create_rice(out);
+        enc = entropy_create_rice(out, bps);
     }
     else
     {

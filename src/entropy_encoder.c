@@ -28,14 +28,14 @@ static uint32_t zigzag(int32_t n)
     return ((uint32_t)n << 1) ^ (uint32_t)(n >> 31);
 }
 
-entropy_encoder_t *entropy_create_rice(FILE *out)
+entropy_encoder_t *entropy_create_rice(FILE *out, uint16_t bits_per_sample)
 {
     entropy_encoder_t *enc = malloc(sizeof(entropy_encoder_t));
     if (enc)
     {
         enc->out = out;
         enc->method = ENTROPY_RICE_CODER;
-        enc->rice_c = rice_coder_create(out);
+        enc->rice_c = rice_coder_create(out, bits_per_sample);
         if (!enc->rice_c)
         {
             free(enc);

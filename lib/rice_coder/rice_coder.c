@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_P 5
+#define MAX_P 6
 #define MAX_K (1 << MAX_P)
 #define K_RANGE 30
 #define VERBATIM (K_RANGE + 1)

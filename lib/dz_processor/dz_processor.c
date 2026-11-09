@@ -39,26 +39,14 @@ void dze_destroy(dz_encoder_t *enc)
 uint32_t dze_next(dz_encoder_t *enc, int32_t sample)
 {
     int32_t delta = sample - enc->last_sample;
-    uint32_t zigzag;
-    switch (enc->bits_per_sample)
-    {
-    case 16:
-        zigzag = (((uint32_t)delta << 1) ^ (uint32_t)(delta >> 15)) & 0xFFFF;
-        break;
-    case 24:
-        zigzag = (((uint32_t)delta << 1) ^ (uint32_t)(delta >> 23)) & 0xFFFFFF;
-        break;
-    case 32:
-        zigzag = ((uint32_t)delta << 1) ^ (uint32_t)(delta >> 31);
-        break;
-    }
+    uint32_t zigzag = ((uint32_t)delta << 1) ^ (uint32_t)(delta >> 31);
     enc->last_sample = sample;
     return zigzag;
 }
 
 dz_decoder_t *dzd_init(uint16_t bits_per_sample)
 {
-    if (bits_per_sample != 16 && bits_per_sample != 32 && bits_per_sample != 24)
+    if (bits_per_sample != 16 && bits_per_sample != 24 && bits_per_sample != 32)
     {
         return NULL;
     }
@@ -78,21 +66,7 @@ void dzd_destroy(dz_decoder_t *dec)
 
 int32_t dzd_next(dz_decoder_t *dec, uint32_t dz_code)
 {
-    int32_t delta;
-
-    switch (dec->bits_per_sample)
-    {
-    case 16:
-        delta = (int16_t)((dz_code >> 1) ^ -(int16_t)(dz_code & 1));
-        break;
-    case 24:
-        delta = (int32_t)((dz_code >> 1) ^ -(int32_t)(dz_code & 1));
-        break;
-    case 32:
-        delta = (int32_t)((dz_code >> 1) ^ -(int32_t)(dz_code & 1));
-        break;
-    }
-
+    int32_t delta = (int32_t)((dz_code >> 1) ^ -(int32_t)(dz_code & 1));
     dec->last_sample += delta;
     return dec->last_sample;
 }

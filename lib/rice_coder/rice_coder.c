@@ -18,7 +18,7 @@ struct rice_coder
     uint8_t k[MAX_K];
     uint32_t cur_idx;
     uint32_t part_size;
-	uint16_t bps;
+    uint16_t bps;
     uint8_t bits;
     uint8_t bits_to_write;
 };
@@ -28,12 +28,12 @@ rice_coder_t *rice_coder_create(FILE *out, uint16_t bits_per_sample)
     rice_coder_t *rice = malloc(sizeof(rice_coder_t));
     if (rice)
     {
-		if (bits_per_sample % 8 != 0 || bits_per_sample > 32 || bits_per_sample == 0)
-		{
-			free(rice);
-			return NULL;
-		}
-		rice->bps = bits_per_sample;
+        if (bits_per_sample > 32 || bits_per_sample == 0)
+        {
+            free(rice);
+            return NULL;
+        }
+        rice->bps = bits_per_sample;
         rice->out = out;
         rice->bits = 0;
         rice->bits_to_write = 0;
@@ -76,7 +76,7 @@ static uint8_t optimal_k(const uint32_t *distribution, int distribution_size, ui
 void optimal_params(rice_coder_t *rice, const uint32_t *distribution, int distribution_size)
 {
     uint64_t cost, tmp, raw_cost, best_cost = UINT64_MAX;
-    uint8_t karr[MAX_K], verbatim[MAX_K];
+    uint8_t karr[MAX_K];
     int num_parts, part_size, n, start;
     for (uint8_t p = 0; p <= MAX_P; p++)
     {
@@ -87,9 +87,9 @@ void optimal_params(rice_coder_t *rice, const uint32_t *distribution, int distri
         {
             start = i * part_size;
             n = (start + part_size > distribution_size) ? (distribution_size - start) : part_size;
-			raw_cost = n * rice->bps;
             if (n <= 0)
                 break;
+            raw_cost = (uint64_t)n * rice->bps;
             karr[i] = optimal_k(distribution + start, n, &tmp);
             if (tmp < raw_cost)
             {
@@ -166,12 +166,15 @@ void rice_coder_encode_elem(rice_coder_t *rice, uint32_t res)
         {
             queue_bit(rice, (r >> i) & 1);
         }
-        rice->cur_idx++;
     }
     else
     {
-        fwrite(&res, rice->bps / 8, 1, rice->out);
+        for (int i = 0; i < rice->bps; i++)
+        {
+            queue_bit(rice, (res >> (rice->bps - i - 1)) & 1);
+        }
     }
+    rice->cur_idx++;
 }
 
 void rice_coder_flush(rice_coder_t *rice)
@@ -195,7 +198,7 @@ struct rice_decoder
     uint32_t part_size;
     uint8_t bits;
     uint8_t bits_in_buf;
-	uint16_t bps;
+    uint16_t bps;
 };
 
 rice_decoder_t *rice_decoder_create(FILE *in, uint16_t bits_per_sample)
@@ -203,12 +206,12 @@ rice_decoder_t *rice_decoder_create(FILE *in, uint16_t bits_per_sample)
     rice_decoder_t *rice = malloc(sizeof(rice_decoder_t));
     if (rice)
     {
-		if (bits_per_sample % 8 != 0 || bits_per_sample == 0 || bits_per_sample > 32)
-		{
-			free(rice);
-			return NULL;
-		}
-		rice->bps = bits_per_sample;
+        if (bits_per_sample > 32 || bits_per_sample == 0)
+        {
+            free(rice);
+            return NULL;
+        }
+        rice->bps = bits_per_sample;
         rice->in = in;
         rice->bits = 0;
         rice->bits_in_buf = 0;
@@ -223,7 +226,6 @@ void rice_decoder_destroy(rice_decoder_t *rice)
     free(rice);
 }
 
-// reads k value from file
 int rice_decoder_set_distribution(rice_decoder_t *rice, int distribution_size)
 {
     rice->bits = 0;
@@ -267,10 +269,10 @@ static uint8_t dequeue_bit(rice_decoder_t *rice)
 
 uint32_t rice_decoder_decode_elem(rice_decoder_t *rice)
 {
-    uint32_t elem = 0;
     uint32_t q = 0;
     uint32_t r = 0;
     uint32_t cur_k = rice->cur_idx / rice->part_size;
+    uint32_t result;
     if (rice->k[cur_k] != VERBATIM)
     {
         while (dequeue_bit(rice) != 1)
@@ -281,15 +283,16 @@ uint32_t rice_decoder_decode_elem(rice_decoder_t *rice)
         {
             r |= dequeue_bit(rice) << i;
         }
-        rice->cur_idx++;
-        return (q << rice->k[cur_k]) | r;
+        result = (q << rice->k[cur_k]) | r;
     }
     else
     {
-        if (fread(&elem, rice->bps / 8, 1, rice->in) != 1)
+        result = 0;
+        for (int i = 0; i < rice->bps; i++)
         {
-            return 0;
+            result |= dequeue_bit(rice) << (rice->bps - i - 1);
         }
-        return elem;
     }
+    rice->cur_idx++;
+    return result;
 }

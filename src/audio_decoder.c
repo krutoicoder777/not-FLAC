@@ -123,11 +123,18 @@ static int decode_one_stream(FILE *in, predictor_method_t predictor, entropy_met
     predictor_decoder_t *pd = NULL;
 
     if (entropy == ENTROPY_RICE_CODER)
-        ed = entropy_d_create_rice(in, bits_per_sample);
+    {
+        int bps_for_verbatim = (bits_per_sample >= 32) ? 32 : (bits_per_sample + 1);
+        ed = entropy_d_create_rice(in, (uint16_t)bps_for_verbatim);
+    }
     else if (entropy == ENTROPY_RANGE_CODER)
+    {
         ed = entropy_d_create_range(in);
-	else
-		return ERR_ARGS;
+    }
+    else
+    {
+        return ERR_ARGS;
+    }
     if (!ed) return ERR_MEM;
 
     if (entropy == ENTROPY_RICE_CODER)

@@ -26,18 +26,12 @@ static int pick_block_size(uint32_t sample_rate, uint16_t channels)
 static uint64_t lpc_cost(int order, const int32_t *samples, uint32_t n)
 {
     predictor_encoder_t *pe = predictor_encoder_create_lpc(order, (int)n);
-    if (!pe)
-    {
-        return UINT64_MAX;
-    }
+    if (!pe) return UINT64_MAX;
     const uint32_t *res = predictor_encoder_encode_block(pe, samples, (int)n);
     uint64_t sum = 0;
     if (res)
     {
-        for (uint32_t i = 0; i < n; i++)
-        {
-            sum += res[i];
-        }
+        for (uint32_t i = 0; i < n; i++) sum += res[i];
     }
     else
     {
@@ -111,7 +105,8 @@ static int encode_one_stream(FILE *out, predictor_method_t predictor, entropy_me
 
     if (entropy == ENTROPY_RICE_CODER)
     {
-        enc = entropy_create_rice(out, bps);
+        int bps_for_verbatim = (bps >= 32) ? 32 : (bps + 1);
+        enc = entropy_create_rice(out, (uint16_t)bps_for_verbatim);
     }
     else
     {
@@ -172,10 +167,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
     }
 
     wav_block_reader_t *wb_probe = wav_block_reader_create(in_path, BLOCK_SIZE);
-    if (!wb_probe)
-    {
-        return ERR_MEM;
-    }
+    if (!wb_probe) return ERR_MEM;
     uint32_t sample_rate = wav_block_reader_sample_rate(wb_probe);
     uint16_t channels = wav_block_reader_channels(wb_probe);
     wav_block_reader_destroy(wb_probe);
@@ -183,10 +175,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
     uint32_t file_block_size = (uint32_t)pick_block_size(sample_rate, channels);
 
     wav_block_reader_t *wb = wav_block_reader_create(in_path, (int)file_block_size);
-    if (!wb)
-    {
-        return ERR_MEM;
-    }
+    if (!wb) return ERR_MEM;
 
     FILE *out = fopen(out_path, "wb");
     if (!out)
@@ -221,10 +210,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
     {
         const int32_t *block = wav_block_reader_next(wb);
         uint32_t block_size = (uint32_t)wav_block_reader_count(wb);
-        if (block_size == 0)
-        {
-            break;
-        }
+        if (block_size == 0) break;
         if (block_size != file_block_size && i != num_blocks - 1)
         {
             free(blocks_offset);

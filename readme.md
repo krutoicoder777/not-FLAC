@@ -15,7 +15,7 @@ The current pipeline consists of two main stages:
 
 2. **Entropy Coding** (selectable):
    - **Arithmetic Range Coder** with adaptive models — better compression, slower.
-   - **Golomb-Rice Coder** — 1.5–2× faster with a small size overhead. Each block is split into `2^p` partitions, with one Rice parameter `k[i]` per partition. Both `p` and the `k` array are chosen per block by exhaustive search over the estimated bit cost.
+   - **Golomb-Rice Coder** — 1.5–2× faster with a small size overhead. Each block is split into `2^p` partitions, with one Rice parameter `k[i]` per partition. Both `p` and the `k` array are chosen per block by exhaustive search over the estimated bit cost. A partition may also fall back to a **verbatim** mode (raw samples) if Rice turns out to be more expensive than raw.
 
 For **stereo** files, each block is additionally passed through one of four **stereo decorrelation modes** (independent / left-side / right-side / mid-side). The mode is picked per block by comparing the LPC residual cost of each candidate. This is the same family of modes FLAC uses; on the current test files it usually picks `independent` (wide stereo image), but the machinery is there.
 
@@ -38,52 +38,64 @@ Comparison against reference lossless codecs. All times measured on WSL2 (single
 
 | Codec | Original | Compressed | Ratio | Time |
 |---|---:|---:|---:|---:|
-| flac | 320078 | 120962 | 37.79% | 0.021 s |
-| wavpack | 320078 | 139846 | 43.69% | 0.028 s |
-| alac | 320078 | 168489 | 52.63% | 0.182 s |
-| notflac LPC+Rice | 320078 | 184604 | 57.67% | 0.030 s |
-| notflac LPC+Range | 320078 | 186760 | 58.34% | 0.038 s |
-| notflac Delta+Rice | 320078 | 238408 | 74.48% | 0.030 s |
-| notflac Delta+Range | 320078 | 240017 | 74.98% | 0.051 s |
+| flac | 320078 | 120962 | 37.79% | 0.016 s |
+| wavpack | 320078 | 139846 | 43.69% | 0.021 s |
+| alac | 320078 | 168489 | 52.63% | 0.117 s |
+| notflac LPC+Rice | 320078 | 184604 | 57.67% | 0.025 s |
+| notflac LPC+Range | 320078 | 186760 | 58.34% | 0.027 s |
+| notflac Delta+Rice | 320078 | 238408 | 74.48% | 0.019 s |
+| notflac Delta+Range | 320078 | 240017 | 74.98% | 0.029 s |
 
 **`16bit-44.1kHz-mono.wav` — 16-bit / 44.1 kHz / mono (158 MB, speech)**
 
 | Codec | Original | Compressed | Ratio | Time |
 |---|---:|---:|---:|---:|
-| flac | 158598386 | 60440009 | 38.10% | 5.10 s |
-| wavpack | 158598386 | 65872640 | 41.53% | 8.18 s |
-| alac | 158598386 | 71386487 | 45.01% | 15.98 s |
-| notflac LPC+Rice | 158598386 | 78639101 | 49.58% | 10.93 s |
-| notflac LPC+Range | 158598386 | 82568961 | 52.06% | 13.54 s |
-| notflac Delta+Rice | 158598386 | 99383196 | 62.66% | 10.35 s |
-| notflac Delta+Range | 158598386 | 104627592 | 65.97% | 15.30 s |
+| flac | 158598386 | 60440009 | 38.10% | 3.38 s |
+| wavpack | 158598386 | 65872640 | 41.53% | 4.68 s |
+| alac | 158598386 | 71386487 | 45.01% | 11.29 s |
+| notflac LPC+Rice | 158598386 | 78639101 | 49.58% | 7.45 s |
+| notflac LPC+Range | 158598386 | 82568961 | 52.06% | 7.93 s |
+| notflac Delta+Rice | 158598386 | 99383196 | 62.66% | 6.64 s |
+| notflac Delta+Range | 158598386 | 104627592 | 65.97% | 9.71 s |
 
 **`24bit-96khz.wav` — 24-bit / 96 kHz / stereo (17 MB, music)**
 
 | Codec | Original | Compressed | Ratio | Time |
 |---|---:|---:|---:|---:|
-| flac | 17280316 | 7750479 | 44.85% | 0.90 s |
-| wavpack | 17280316 | 8059396 | 46.63% | 0.51 s |
-| alac | 17280316 | 8400415 | 48.61% | 1.63 s |
-| notflac LPC+Rice | 17280316 | 8205307 | 47.48% | 1.06 s |
-| notflac LPC+Range | 17280316 | 8114331 | 46.95% | 1.49 s |
-| notflac Delta+Rice | 17280316 | 10139600 | 58.67% | 1.05 s |
-| notflac Delta+Range | 17280316 | 10111431 | 58.51% | 1.85 s |
+| flac | 17280316 | 7750479 | 44.85% | 0.61 s |
+| wavpack | 17280316 | 8059396 | 46.63% | 0.35 s |
+| alac | 17280316 | 8400415 | 48.61% | 1.05 s |
+| notflac LPC+Rice | 17280316 | 8205307 | 47.48% | 0.74 s |
+| notflac LPC+Range | 17280316 | 8114331 | 46.95% | 0.94 s |
+| notflac Delta+Rice | 17280316 | 10139600 | 58.67% | 0.73 s |
+| notflac Delta+Range | 17280316 | 10111431 | 58.51% | 1.13 s |
 
 **`stereo.wav` — 24-bit / 96 kHz / stereo (25 MB, music)**
 
 | Codec | Original | Compressed | Ratio | Time |
 |---|---:|---:|---:|---:|
-| flac | 25534598 | 10442541 | 40.89% | 1.50 s |
-| wavpack | 25534598 | 10963874 | 42.93% | 1.07 s |
-| alac | 25534598 | 12115946 | 47.44% | 2.25 s |
-| notflac LPC+Rice | 25534598 | 12295453 | 48.15% | 2.15 s |
-| notflac LPC+Range | 25534598 | 12368346 | 48.43% | 2.32 s |
-| notflac Delta+Rice | 25534598 | 15765927 | 61.74% | 2.06 s |
-| notflac Delta+Range | 25534598 | 15921836 | 62.35% | 2.70 s |
+| flac | 25534598 | 10442541 | 40.89% | 0.92 s |
+| wavpack | 25534598 | 10963874 | 42.93% | 0.69 s |
+| alac | 25534598 | 12115946 | 47.44% | 1.67 s |
+| notflac LPC+Rice | 25534598 | 12295453 | 48.15% | 1.34 s |
+| notflac LPC+Range | 25534598 | 12368346 | 48.43% | 1.46 s |
+| notflac Delta+Rice | 25534598 | 15765928 | 61.74% | 1.26 s |
+| notflac Delta+Range | 25534598 | 15921838 | 62.35% | 1.69 s |
+
+**`noise.wav` — 16-bit / 16 kHz / mono (320 KB, white noise)**
+
+| Codec | Original | Compressed | Ratio | Time |
+|---|---:|---:|---:|---:|
+| flac | 320044 | 309004 | 96.55% | 0.013 s |
+| wavpack | 320044 | 299972 | 93.72% | 0.020 s |
+| alac | 320044 | 304859 | 95.25% | 0.117 s |
+| notflac LPC+Rice | 320044 | 300371 | 93.85% | 0.022 s |
+| notflac LPC+Range | 320044 | 299395 | 93.54% | 0.041 s |
+| notflac Delta+Rice | 320044 | 311172 | 97.22% | 0.021 s |
+| notflac Delta+Range | 320044 | 308839 | 96.49% | 0.038 s |
 
 **Observations:**
-- **Best result:** `24bit-96khz.wav` at **47.48%** — within **2.6 pp of FLAC**, and ahead of ALAC (48.61%). Closest to the reference codecs.
+- **Best result:** `24bit-96khz.wav` at **47.48%** — within **2.6 pp of FLAC**, and **ahead of ALAC** (48.61%). Closest to the reference codecs.
 - **Worst result:** `wav.wav` at **57.67%** — short file, header/seek-table overhead dominates, and no stereo/mid-side tricks apply.
 - **Mid/side on stereo:** the 4-mode stereo selection was implemented, but on the current test files the LPC cost almost always picks `independent` — so the visible gain is small (~0.1–0.4 pp). The machinery is in place for files where mid/side actually wins.
 
@@ -176,7 +188,7 @@ All multi-byte integers are **little-endian**.
 | Offset | Size | Field              | Notes                                             |
 |--------|------|--------------------|---------------------------------------------------|
 | 0      | 4    | `magic`            | `0x4E464C41` (`"NFLA"`)                           |
-| 4      | 1    | `version`          | currently `7`                                     |
+| 4      | 1    | `version`          | currently `8`                                     |
 | 5      | 1    | `entropy_method`   | `0` = Range Coder, `1` = Rice Coder               |
 | 6      | 1    | `predictor_method` | `0` = Delta, `1` = LPC                            |
 | 7      | 1    | `reserved`         | `0`                                               |
@@ -205,7 +217,7 @@ After the flag, the block contains **two independent entropy streams** (primary 
 
 **Delta mode (`predictor_method == 0`):**
 - With **Range** (`entropy_method == 0`): each residual `zigzag(sample - prev_sample)` is written through the per-byte adaptive models.
-- With **Rice** (`entropy_method == 1`): each stream starts with a 1-byte `p` (partition order), followed by `1<<p` bytes of `k[i]`, then all residuals coded per partition as `unary(q) + k[i] bits(r)`, where `z = zigzag(sample - prev_sample)`, `q = z >> k[i]`, `r = z & ((1 << k[i]) - 1)`.
+- With **Rice** (`entropy_method == 1`): each stream starts with a 1-byte `p` (partition order), followed by `1<<p` bytes of `k[i]`, then all residuals coded per partition as `unary(q) + k[i] bits(r)`, where `z = zigzag(sample - prev_sample)`, `q = z >> k[i]`, `r = z & ((1 << k[i]) - 1)`. If a partition is flagged **verbatim**, its samples are written as raw `bits_per_sample + 1`-bit values instead.
 - `prev_sample` is reset to `0` at the start of every stream.
 
 **LPC mode (`predictor_method == 1`):** each stream contains, in order:
@@ -239,8 +251,9 @@ With the seek table, `notflac_player` can jump straight to any block: `fseek(blo
 - [X] **Adaptive LPC order** based on sample rate (8/12/16)
 - [X] **Adaptive block size** based on channel count (`8192 × 2 × channels`)
 - [X] **Mid/Side stereo** decorrelation (4 modes, chosen per block by LPC cost)
-- [ ] **Verbatim mode** for noisy partitions (write raw when Rice is worse)
-- [ ] **Adaptive LPC order per block** (AIC / residual energy)
+- [X] **Verbatim partitions** (write raw when Rice is worse)
+- [ ] **Fixed predictors per block** (FLAC-style: raw / delta / polynomial vs LPC, chosen per block)
+- [ ] **Wasted bits** detection (skip all-zero low bits in upsampled / low-bitrate sources)
 - [ ] **Persistent entropy models**: stop resetting adaptive models at every block boundary (Range only, incompatible with O(1) seek)
 - [ ] Optional: simple cross-platform GUI in Python (PySide6 or Tkinter) wrapping the CLI
 
@@ -256,4 +269,5 @@ With the seek table, `notflac_player` can jump straight to any block: `fseek(blo
 * **v0.4** — **Partitioned Rice** (each block is split into `2^p` partitions, one Rice parameter per partition, with `p` chosen by bit-cost search) closes the gap with the Range coder and even beats it on the large file. **Adaptive LPC order** (8 for ≤24 kHz, 12 for ≤48 kHz, 16 for >48 kHz) cuts encoding time by 14–29%. File format version bumped to `4`.
 * **v0.5** — **Adaptive block size**: `block_size = 8192 × 2 × channels` (16384 for mono, 32768 for stereo), improving compression by 0.7–3.4 pp across all test files. File format version bumped to `5`.
 * **v0.6** — **Stereo decorrelation** (independent / left-side / right-side / mid-side, chosen per block by LPC residual cost) and **`-O3 -march=native`** in the Release build. On the current test files mid/side only yields ~0.1–0.4 pp (the cost search usually picks `independent` because the stereo image is wide), but the machinery is in place for files where it matters. An experimental LPC precision search (`S_base ± 1`) gave a further ~0.1–0.4 pp but was ~1.5–2× slower on LPC-heavy files, so it is currently disabled (`dS = 0`) and left in the code for later. File format version bumped to `6`.
-* **v0.7** added verbatim for better compression of noisy files and files with sound attacks.
+* **v0.7** — **Verbatim partitions** (write raw when Rice is worse) and **`bits_per_sample + 1`** safety margin for the verbatim path. File format version bumped to `7`.
+* **v0.8** — **Bug fix**: the Delta path produced incorrect output on high-delta signals (white noise, wide stereo) because ZigZag was masking to `int16`/`int24` and dropping the top bit. Now ZigZag uses the full `int32` range on both encoder and decoder. Round-trip verified on the new `noise.wav` test file. File format version bumped to `8`.

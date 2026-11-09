@@ -4,6 +4,7 @@
 #include "stereo.h"
 #include "notflac_format.h"
 #include "predictor_encoder.h"
+#include "simple_predictors.h"
 #include "wav_block.h"
 #include "wav_stream.h"
 #include <stdint.h>
@@ -39,6 +40,22 @@ static uint64_t lpc_cost(int order, const int32_t *samples, uint32_t n)
     }
     predictor_encoder_destroy(pe);
     return sum;
+}
+
+static int best_predictor(int lpc_order, const int32_t *samples, uint32_t n)
+{
+    uint64_t best_cost = lpc_cost(lpc_order, samples, n);
+    int best = 0;
+    for (int k = 0; k <= 4; k++)
+    {
+        uint64_t cost = sp_cost(k, samples, n);
+        if (cost < best_cost)
+        {
+            best_cost = cost;
+            best = k + 1;
+        }
+    }
+    return best;
 }
 
 static int write_nf_header(FILE *out, wav_block_reader_t *wb, predictor_method_t predictor, entropy_method_t entropy)
@@ -83,66 +100,49 @@ static int write_nf_header(FILE *out, wav_block_reader_t *wb, predictor_method_t
     return OK;
 }
 
-static int encode_one_stream(FILE *out, predictor_method_t predictor, entropy_method_t entropy,
-                             int16_t bps, int order,
+static int encode_one_stream(FILE *out, predictor_method_t mode, entropy_method_t entropy,
+                             int16_t bps, int lpc_order,
                              const int32_t *samples, uint32_t n)
 {
-    predictor_encoder_t *pe;
-    entropy_encoder_t *enc = NULL;
-
-    if (predictor == PREDICTOR_LPC)
+    int pred_type;
+    if (mode == PREDICTOR_DELTA)
     {
-        pe = predictor_encoder_create_lpc(order, (int)n);
+        pred_type = 2;   // fixed order 1 == delta
     }
     else
     {
-        pe = predictor_encoder_create_delta(bps, (int)n);
+        pred_type = best_predictor(lpc_order, samples, n);
     }
-    if (!pe)
-    {
-        return ERR_MEM;
-    }
+    fputc(pred_type, out);
 
-    if (entropy == ENTROPY_RICE_CODER)
-    {
-        int bps_for_verbatim = (bps >= 32) ? 32 : (bps + 1);
-        enc = entropy_create_rice(out, (uint16_t)bps_for_verbatim);
-    }
-    else
-    {
-        enc = entropy_create_range(out);
-    }
-    if (!enc)
-    {
-        predictor_encoder_destroy(pe);
-        return ERR_MEM;
-    }
+    predictor_encoder_t *pe = (pred_type == 0)
+        ? predictor_encoder_create_lpc(lpc_order, (int)n)
+        : predictor_encoder_create_fixed(pred_type - 1, (int)n);
+    if (!pe) return ERR_MEM;
 
-    const uint32_t *residuals = predictor_encoder_encode_block(pe, samples, (int)n);
-    if (!residuals)
-    {
-        entropy_destroy(enc);
-        predictor_encoder_destroy(pe);
-        return ERR_IO;
-    }
+    int bps_for_verbatim = (bps >= 32) ? 32 : (bps + 1);
+    entropy_encoder_t *enc = (entropy == ENTROPY_RICE_CODER)
+        ? entropy_create_rice(out, (uint16_t)bps_for_verbatim)
+        : entropy_create_range(out);
+    if (!enc) { predictor_encoder_destroy(pe); return ERR_MEM; }
+
+    const uint32_t *residuals = (pred_type == 0)
+        ? predictor_encoder_encode_block(pe, samples, (int)n)
+        : predictor_encoder_encode_block_fixed(pe, samples, (int)n);
+    if (!residuals) { entropy_destroy(enc); predictor_encoder_destroy(pe); return ERR_IO; }
 
     if (entropy == ENTROPY_RICE_CODER)
     {
         int rc = entropy_set_state(enc, residuals, (int)n);
-        if (rc < 0)
-        {
-            entropy_destroy(enc);
-            predictor_encoder_destroy(pe);
-            return ERR_IO;
-        }
+        if (rc < 0) { entropy_destroy(enc); predictor_encoder_destroy(pe); return ERR_IO; }
     }
 
-    if (predictor == PREDICTOR_LPC)
+    if (pred_type == 0)
     {
         const int32_t *quotients = predictor_encoder_quotients(pe);
         int precision = predictor_encoder_precision(pe);
         entropy_encode_precision(enc, (uint8_t)precision);
-        for (int j = 0; j < order; j++)
+        for (int j = 0; j < lpc_order; j++)
         {
             entropy_encode_quotient(enc, quotients[j]);
         }
@@ -178,31 +178,17 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
     if (!wb) return ERR_MEM;
 
     FILE *out = fopen(out_path, "wb");
-    if (!out)
-    {
-        wav_block_reader_destroy(wb);
-        return ERR_IO;
-    }
+    if (!out) { wav_block_reader_destroy(wb); return ERR_IO; }
 
     int rc = write_nf_header(out, wb, predictor, entropy);
-    if (rc != OK)
-    {
-        wav_block_reader_destroy(wb);
-        fclose(out);
-        return rc;
-    }
+    if (rc != OK) { wav_block_reader_destroy(wb); fclose(out); return rc; }
 
     int16_t bps = (int16_t)wav_block_reader_bits_per_sample(wb);
     int order = pick_order(sample_rate);
     uint32_t num_blocks = wav_block_reader_num_blocks(wb);
 
     uint64_t *blocks_offset = malloc(sizeof(uint64_t) * num_blocks);
-    if (!blocks_offset)
-    {
-        wav_block_reader_destroy(wb);
-        fclose(out);
-        return ERR_MEM;
-    }
+    if (!blocks_offset) { wav_block_reader_destroy(wb); fclose(out); return ERR_MEM; }
 
     uint32_t last_block_size = 0;
 
@@ -232,9 +218,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
             if (!L || !R || !M || !S)
             {
                 free(L); free(R); free(M); free(S);
-                free(blocks_offset);
-                wav_block_reader_destroy(wb);
-                fclose(out);
+                free(blocks_offset); wav_block_reader_destroy(wb); fclose(out);
                 return ERR_MEM;
             }
 
@@ -276,9 +260,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
 
             if (rc1 != OK || rc2 != OK)
             {
-                free(blocks_offset);
-                wav_block_reader_destroy(wb);
-                fclose(out);
+                free(blocks_offset); wav_block_reader_destroy(wb); fclose(out);
                 return (rc1 != OK) ? rc1 : rc2;
             }
         }
@@ -288,9 +270,7 @@ int encode_audio(predictor_method_t predictor, entropy_method_t entropy, const c
             int rc1 = encode_one_stream(out, predictor, entropy, bps, order, block, block_size);
             if (rc1 != OK)
             {
-                free(blocks_offset);
-                wav_block_reader_destroy(wb);
-                fclose(out);
+                free(blocks_offset); wav_block_reader_destroy(wb); fclose(out);
                 return rc1;
             }
         }

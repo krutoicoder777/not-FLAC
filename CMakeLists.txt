@@ -15,8 +15,10 @@ include_directories(
     lib/wav_block
     lib/wav_stream
     lib/wav_writer
+	lib/simple_predictors
 )
 
+add_library(simple_predictors STATIC lib/simple_predictors/simple_predictors.c)
 add_library(dz_processor STATIC lib/dz_processor/dz_processor.c)
 add_library(wav_stream STATIC lib/wav_stream/wav_stream.c)
 add_library(wav_block STATIC lib/wav_block/wav_block.c)
@@ -40,6 +42,7 @@ target_link_libraries(wav_block wav_stream)
 target_link_libraries(entropy_coder rice_coder m)
 target_link_libraries(lpc m)
 target_link_libraries(predictor lpc dz_processor)
+target_link_libraries(predictor simple_predictors lpc dz_processor)
 
 set(CORE_SRCS
     src/audio_encoder.c

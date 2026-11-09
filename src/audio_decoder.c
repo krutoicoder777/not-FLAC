@@ -115,12 +115,15 @@ int audio_decoder_seek_block(audio_decoder_t *dec, uint32_t block_index)
     return OK;
 }
 
-static int decode_one_stream(FILE *in, predictor_method_t predictor, entropy_method_t entropy,
-                             int bits_per_sample, int order,
+static int decode_one_stream(FILE *in, entropy_method_t entropy,
+                             int bits_per_sample, int lpc_order,
                              uint32_t n, int32_t *out)
 {
     entropy_decoder_t *ed = NULL;
     predictor_decoder_t *pd = NULL;
+
+    int pred_type = fgetc(in);
+    if (pred_type == EOF) return ERR_IO;
 
     if (entropy == ENTROPY_RICE_CODER)
     {
@@ -131,62 +134,44 @@ static int decode_one_stream(FILE *in, predictor_method_t predictor, entropy_met
     {
         ed = entropy_d_create_range(in);
     }
-    else
-    {
-        return ERR_ARGS;
-    }
+    else return ERR_ARGS;
     if (!ed) return ERR_MEM;
 
     if (entropy == ENTROPY_RICE_CODER)
     {
         int rc = entropy_decoder_set_state(ed, (int)n);
-        if (rc != 0)
-        {
-            entropy_d_destroy(ed);
-            return ERR_IO;
-        }
+        if (rc != 0) { entropy_d_destroy(ed); return ERR_IO; }
     }
 
     int32_t quotients[LPC_ORDER_MAX];
     uint8_t precision = 0;
-    if (predictor == PREDICTOR_LPC)
+    if (pred_type == 0)
     {
         precision = entropy_decode_precision(ed);
-        for (int j = 0; j < order; j++)
+        for (int j = 0; j < lpc_order; j++)
             quotients[j] = entropy_decode_quotient(ed);
-    }
-
-    uint32_t *residuals = malloc(sizeof(uint32_t) * n);
-    if (!residuals)
-    {
-        entropy_d_destroy(ed);
-        return ERR_MEM;
-    }
-    for (uint32_t i = 0; i < n; i++)
-        residuals[i] = entropy_decode_sample(ed);
-
-    if (predictor == PREDICTOR_LPC)
-        pd = predictor_decoder_create_lpc(order, (int)n);
-    else
-        pd = predictor_decoder_create_delta(bits_per_sample, (int)n);
-    if (!pd)
-    {
-        free(residuals);
-        entropy_d_destroy(ed);
-        return ERR_MEM;
-    }
-
-    if (predictor == PREDICTOR_LPC)
+        pd = predictor_decoder_create_lpc(lpc_order, (int)n);
+        if (!pd) { entropy_d_destroy(ed); return ERR_MEM; }
         predictor_decoder_set_quotients(pd, quotients, precision);
-
-    const int32_t *samples = predictor_decoder_decode_block(pd, residuals, (int)n);
-    if (!samples)
+    }
+    else if (pred_type >= 1 && pred_type <= 5)
     {
-        free(residuals);
-        predictor_decoder_destroy(pd);
+        pd = predictor_decoder_create_fixed(pred_type - 1, (int)n);
+        if (!pd) { entropy_d_destroy(ed); return ERR_MEM; }
+    }
+    else
+    {
         entropy_d_destroy(ed);
         return ERR_IO;
     }
+
+    uint32_t *residuals = malloc(sizeof(uint32_t) * n);
+    if (!residuals) { predictor_decoder_destroy(pd); entropy_d_destroy(ed); return ERR_MEM; }
+    for (uint32_t i = 0; i < n; i++)
+        residuals[i] = entropy_decode_sample(ed);
+
+    const int32_t *samples = predictor_decoder_decode_block(pd, residuals, (int)n);
+    if (!samples) { free(residuals); predictor_decoder_destroy(pd); entropy_d_destroy(ed); return ERR_IO; }
     memcpy(out, samples, sizeof(int32_t) * n);
 
     free(residuals);
@@ -204,11 +189,7 @@ const int32_t *audio_decoder_decode_block(audio_decoder_t *dec, int *cur_samples
     }
 
     uint32_t n_total = dec->cur_block_samples;
-    if (n_total == 0)
-    {
-        *cur_samples = 0;
-        return NULL;
-    }
+    if (n_total == 0) { *cur_samples = 0; return NULL; }
 
     if (dec->scratch_capacity < n_total)
     {
@@ -228,36 +209,18 @@ const int32_t *audio_decoder_decode_block(audio_decoder_t *dec, int *cur_samples
         uint32_t n = n_total / 2;
         int32_t *prim_buf = malloc(sizeof(int32_t) * n);
         int32_t *sec_buf = malloc(sizeof(int32_t) * n);
-        if (!prim_buf || !sec_buf)
-        {
-            free(prim_buf);
-            free(sec_buf);
-            return NULL;
-        }
-        int rc1 = decode_one_stream(dec->in, dec->predictor, dec->entropy,
-                                    dec->bits_per_sample, dec->lpc_order, n, prim_buf);
-        if (rc1 != OK)
-        {
-            free(prim_buf);
-            free(sec_buf);
-            return NULL;
-        }
-        int rc2 = decode_one_stream(dec->in, dec->predictor, dec->entropy,
-                                    dec->bits_per_sample, dec->lpc_order, n, sec_buf);
-        if (rc2 != OK)
-        {
-            free(prim_buf);
-            free(sec_buf);
-            return NULL;
-        }
+        if (!prim_buf || !sec_buf) { free(prim_buf); free(sec_buf); return NULL; }
+        int rc1 = decode_one_stream(dec->in, dec->entropy, dec->bits_per_sample, dec->lpc_order, n, prim_buf);
+        if (rc1 != OK) { free(prim_buf); free(sec_buf); return NULL; }
+        int rc2 = decode_one_stream(dec->in, dec->entropy, dec->bits_per_sample, dec->lpc_order, n, sec_buf);
+        if (rc2 != OK) { free(prim_buf); free(sec_buf); return NULL; }
         stereo_decode(mode, prim_buf, sec_buf, dec->scratch, (int)n);
         free(prim_buf);
         free(sec_buf);
     }
     else
     {
-        int rc1 = decode_one_stream(dec->in, dec->predictor, dec->entropy,
-                                    dec->bits_per_sample, dec->lpc_order, n_total, dec->scratch);
+        int rc1 = decode_one_stream(dec->in, dec->entropy, dec->bits_per_sample, dec->lpc_order, n_total, dec->scratch);
         if (rc1 != OK) return NULL;
     }
 

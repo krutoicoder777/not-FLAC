@@ -6,19 +6,30 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#endif
+
 int main(int argc, char *argv[])
 {
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+
     if (argc < 2)
     {
         fprintf(stderr, "Usage: %s <file.notflac> [start_sec] [end_sec]\n", argv[0]);
         return 1;
     }
+
     FILE *f = fopen(argv[1], "rb");
     if (!f)
     {
         fprintf(stderr, "cannot open %s\n", argv[1]);
         return 1;
     }
+
     audio_decoder_t *dec = audio_decoder_open(f);
     if (!dec)
     {
@@ -108,6 +119,11 @@ int main(int argc, char *argv[])
         else if (bits == 32)
         {
             fwrite(&sample, 4, 1, stdout);
+        }
+        else if (bits == 8)
+        {
+            int8_t s = (int8_t)sample;
+            fwrite(&s, 1, 1, stdout);
         }
     }
 

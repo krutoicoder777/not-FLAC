@@ -1,25 +1,14 @@
-#include "models.h"
+#include "entropy_encoder.h"
 #include "notflac_format.h"
-#include "range_coder.h"
 #include "rice_coder.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct entropy_encoder entropy_encoder_t;
-
 struct entropy_encoder
 {
     FILE *out;
     entropy_method_t method;
-    // Range coder
-    range_coder_t *range_c;
-    slot_model_t sample_m;
-    slot_model_t quot_m;
-    model_t byte_m;
-    prec_model_t precision_m;
-
-    // Rice coder
     rice_coder_t *rice_c;
 };
 
@@ -28,148 +17,96 @@ static uint32_t zigzag(int32_t n)
     return ((uint32_t)n << 1) ^ (uint32_t)(n >> 31);
 }
 
-entropy_encoder_t *entropy_create_rice(FILE *out, uint16_t bits_per_sample)
+entropy_encoder_t *entropy_create_rice(FILE *out, uint16_t bps)
 {
-    entropy_encoder_t *enc = malloc(sizeof(entropy_encoder_t));
-    if (enc)
-    {
-        enc->out = out;
-        enc->method = ENTROPY_RICE_CODER;
-        enc->rice_c = rice_coder_create(out, bits_per_sample);
-        if (!enc->rice_c)
-        {
-            free(enc);
-            return NULL;
-        }
-        enc->range_c = NULL;
-    }
-    return enc;
-}
+    entropy_encoder_t *enc;
 
-entropy_encoder_t *entropy_create_range(FILE *out)
-{
-    entropy_encoder_t *enc = malloc(sizeof(entropy_encoder_t));
-    if (enc)
+    enc = malloc(sizeof(entropy_encoder_t));
+    if (!enc)
     {
-        enc->rice_c = NULL;
-        enc->out = out;
-        enc->range_c = rc_init(out);
-        if (!enc->range_c)
-        {
-            free(enc);
-            enc = NULL;
-        }
-        else
-        {
-            enc->method = ENTROPY_RANGE_CODER;
-            model_init(&enc->byte_m);
-            prec_model_init(&enc->precision_m);
-            slot_model_init(&enc->quot_m);
-            slot_model_init(&enc->sample_m);
-        }
+        return NULL;
     }
+
+    enc->out = out;
+    enc->method = ENTROPY_RICE_CODER;
+    enc->rice_c = rice_coder_create(out, bps);
+
+    if (!enc->rice_c)
+    {
+        free(enc);
+        return NULL;
+    }
+
     return enc;
 }
 
 void entropy_destroy(entropy_encoder_t *enc)
 {
-    if (enc)
+    if (!enc)
     {
-        if (enc->range_c)
-        {
-            rc_flush(enc->range_c);
-            rc_destroy(enc->range_c);
-        }
-        if (enc->rice_c)
-        {
-            rice_coder_flush(enc->rice_c);
-            rice_coder_destroy(enc->rice_c);
-        }
-        free(enc);
+        return;
     }
+
+    if (enc->rice_c)
+    {
+        rice_coder_flush(enc->rice_c);
+        rice_coder_destroy(enc->rice_c);
+    }
+
+    free(enc);
 }
 
-void entropy_encode_sample(entropy_encoder_t *enc, uint32_t sample) // sample is already zigzag`ed
+void entropy_encode_sample(entropy_encoder_t *enc, uint32_t sample)
 {
-    if (enc->method == ENTROPY_RANGE_CODER)
-    {
-        int s = slot(sample);
-        int b = base_dist(s);
-        int eb = extra_bits(s);
-        uint32_t offset = sample - b;
-        rc_update(enc->range_c, slot_model_cum(&enc->sample_m, s), slot_model_freq(&enc->sample_m, s),
-                  enc->sample_m.total);
-        slot_model_update(&enc->sample_m, s);
-        for (int i = eb - 1; i >= 0; i--)
-        {
-            int bit = (offset >> i) & 1;
-            rc_update(enc->range_c, bit, 1, 2);
-        }
-    }
-    else if (enc->method == ENTROPY_RICE_CODER)
-    {
-        rice_coder_encode_elem(enc->rice_c, sample);
-    }
+    rice_coder_encode_elem(enc->rice_c, sample);
 }
 
 void entropy_encode_precision(entropy_encoder_t *enc, uint8_t precision)
 {
-    if (enc->method == ENTROPY_RANGE_CODER)
-    {
-        if (precision > 15)
-        {
-            precision = 15;
-        }
-        rc_update(enc->range_c, prec_model_cum(&enc->precision_m, precision),
-                  prec_model_freq(&enc->precision_m, precision), enc->precision_m.total);
-    }
-    else if (enc->method == ENTROPY_RICE_CODER)
-    {
-        fwrite(&precision, 1, 1, enc->out);
-    }
+    fputc(precision, enc->out);
 }
 
-void entropy_encode_byte(entropy_encoder_t *enc, uint8_t byte)
+void entropy_encode_quotients(entropy_encoder_t *enc, const int32_t *quotients, int order)
 {
-    if (enc->method == ENTROPY_RANGE_CODER)
-    {
-        rc_update(enc->range_c, model_cum(&enc->byte_m, byte), model_freq(&enc->byte_m, byte), enc->byte_m.total);
-        model_update(&enc->byte_m, byte);
-    }
-    else if (enc->method == ENTROPY_RICE_CODER)
-    {
-        fwrite(&byte, 1, 1, enc->out);
-    }
-}
+    uint32_t zz[32];
+    rice_coder_t *q_coder;
+    int j;
 
-void entropy_encode_quotient(entropy_encoder_t *enc, int32_t quotient) // quotient is not zigzag`ed
-{
-    if (enc->method == ENTROPY_RANGE_CODER)
+    if (order <= 0)
     {
-        uint32_t zz = zigzag(quotient);
-        int s = slot(zz);
-        int b = base_dist(s);
-        int eb = extra_bits(s);
-        uint32_t offset = zz - b;
-        rc_update(enc->range_c, slot_model_cum(&enc->quot_m, s), slot_model_freq(&enc->quot_m, s), enc->quot_m.total);
-        slot_model_update(&enc->quot_m, s);
-        for (int i = eb - 1; i >= 0; i--)
-        {
-            int bit = (offset >> i) & 1;
-            rc_update(enc->range_c, bit, 1, 2);
-        }
+        fputc(0, enc->out);
+        return;
     }
-    else if (enc->method == ENTROPY_RICE_CODER)
+
+    for (j = 0; j < order; j++)
     {
-        fwrite(&quotient, 4, 1, enc->out);
+        zz[j] = zigzag(quotients[j]);
     }
+
+    q_coder = rice_coder_create(enc->out, 16);
+
+    if (!q_coder)
+    {
+        return;
+    }
+
+    rice_coder_set_distribution(q_coder, zz, order);
+
+    for (j = 0; j < order; j++)
+    {
+        rice_coder_encode_elem(q_coder, zz[j]);
+    }
+
+    rice_coder_flush(q_coder);
+    rice_coder_destroy(q_coder);
 }
 
 int entropy_set_state(entropy_encoder_t *enc, const uint32_t *block, int block_size)
 {
-    if (enc->method == ENTROPY_RICE_CODER && enc->rice_c)
-    {
-        return rice_coder_set_distribution(enc->rice_c, block, block_size);
-    }
-	return 0;
+    return rice_coder_set_distribution(enc->rice_c, block, block_size);
+}
+
+void entropy_set_num_warmup(entropy_encoder_t *enc, uint32_t num_warmup)
+{
+    rice_coder_set_num_warmup(enc->rice_c, num_warmup);
 }

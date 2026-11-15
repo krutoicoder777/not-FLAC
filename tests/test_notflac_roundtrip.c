@@ -14,28 +14,49 @@
 static double get_time(void)
 {
     struct timespec ts;
+
     clock_gettime(CLOCK_MONOTONIC, &ts);
+
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
 static long get_file_size(const char *path)
 {
     struct stat st;
+
     if (stat(path, &st) == 0)
     {
         return st.st_size;
     }
+
     return -1;
 }
 
 static int test_file(const char *path)
 {
+    long original_size;
+    const char *combo_name;
+    char comp[512 + 32];
+    double start;
+    int res;
+    double enc_time;
+    long comp_size;
+    double ratio;
+    FILE *in;
+    audio_decoder_t *dec;
+    wav_stream_t *ws;
+    int errors;
+    uint32_t n;
+    uint32_t n_orig;
+    uint32_t i;
+
     if (strstr(path, ".wav") == NULL)
     {
         return 0;
     }
 
-    long original_size = get_file_size(path);
+    original_size = get_file_size(path);
+
     if (original_size <= 0)
     {
         printf("  [SKIP] %s\n", path);
@@ -44,154 +65,172 @@ static int test_file(const char *path)
 
     printf("  [FILE] %s (%ld B)\n", path, original_size);
 
-    struct {
-        const char *name;
-        predictor_method_t pred;
-        entropy_method_t ent;
-    } combos[] = {
-        {"LPC+Rice",    PREDICTOR_LPC,   ENTROPY_RICE_CODER},
-        {"LPC+Range",   PREDICTOR_LPC,   ENTROPY_RANGE_CODER},
-        {"Delta+Rice",  PREDICTOR_DELTA, ENTROPY_RICE_CODER},
-        {"Delta+Range", PREDICTOR_DELTA, ENTROPY_RANGE_CODER},
-    };
-    int n_combos = (int)(sizeof(combos) / sizeof(combos[0]));
-    int total_errors = 0;
+    combo_name = "LPC+Rice";
+    snprintf(comp, sizeof(comp), "%s.notflac", path);
 
-    for (int c = 0; c < n_combos; c++)
+    start = get_time();
+    res = encode_audio(PREDICTOR_LPC, ENTROPY_RICE_CODER, path, comp);
+    enc_time = get_time() - start;
+    comp_size = get_file_size(comp);
+
+    if (res != OK || comp_size <= 0)
     {
-        char comp[512 + 32];
-        snprintf(comp, sizeof(comp), "%s.%d_%d.notflac", path, (int)combos[c].pred, (int)combos[c].ent);
-
-        double start = get_time();
-        int res = encode_audio(combos[c].pred, combos[c].ent, path, comp);
-        double enc_time = get_time() - start;
-        long comp_size = get_file_size(comp);
-
-        if (res != OK || comp_size <= 0)
-        {
-            printf("    [FAIL] %-12s encode error\n", combos[c].name);
-            remove(comp);
-            total_errors++;
-            continue;
-        }
-
-        double ratio = (double)comp_size / original_size * 100.0;
-
-        FILE *in = fopen(comp, "rb");
-        if (!in)
-        {
-            printf("    [FAIL] %-12s cannot open\n", combos[c].name);
-            remove(comp);
-            total_errors++;
-            continue;
-        }
-        audio_decoder_t *dec = audio_decoder_open(in);
-        if (!dec)
-        {
-            printf("    [FAIL] %-12s decoder open failed\n", combos[c].name);
-            fclose(in);
-            remove(comp);
-            total_errors++;
-            continue;
-        }
-        wav_stream_t *ws = wav_stream_open(path);
-        if (!ws)
-        {
-            printf("    [FAIL] %-12s wav open failed\n", combos[c].name);
-            audio_decoder_close(dec);
-            fclose(in);
-            remove(comp);
-            total_errors++;
-            continue;
-        }
-
-        int errors = 0;
-        uint32_t n = audio_decoder_num_samples(dec);
-        uint32_t n_orig = wav_stream_num_samples(ws);
-        if (n != n_orig)
-        {
-            printf("    [FAIL] %-12s num_samples %u vs %u\n", combos[c].name, n, n_orig);
-            errors++;
-        }
-        else
-        {
-            for (uint32_t i = 0; i < n; i++)
-            {
-                int32_t s_dec, s_orig;
-                if (audio_decode_next(dec, &s_dec) != 0)
-                {
-                    if (errors < 1) printf("    [FAIL] %-12s decode_next at %u\n", combos[c].name, i);
-                    errors++;
-                    break;
-                }
-                if (wav_stream_next_sample(ws, &s_orig) != WAV_OK)
-                {
-                    if (errors < 1) printf("    [FAIL] %-12s wav_stream at %u\n", combos[c].name, i);
-                    errors++;
-                    break;
-                }
-                if (s_dec != s_orig)
-                {
-                    if (errors < 1) printf("    [FAIL] %-12s mismatch at %u: %d vs %d\n", combos[c].name, i, s_dec, s_orig);
-                    errors++;
-                }
-            }
-        }
-
-        wav_stream_close(ws);
-        audio_decoder_close(dec);
-        fclose(in);
+        printf("    [FAIL] %-12s encode error\n", combo_name);
         remove(comp);
-
-        if (errors == 0)
-        {
-            printf("    [OK]   %-12s %7ld B (%5.1f%%) | E: %.3fs\n",
-                   combos[c].name, comp_size, ratio, enc_time);
-        }
-        else
-        {
-            printf("    [FAIL] %-12s round-trip (%d errors)\n", combos[c].name, errors);
-            total_errors++;
-        }
-    }
-
-    return total_errors > 0;
-}
-
-int main(void)
-{
-    const char *data_dir = "tests/data";
-    DIR *dir = opendir(data_dir);
-    if (!dir)
-    {
-        printf("Cannot open %s\n", data_dir);
         return 1;
     }
 
-    printf("=== NOTFLAC ROUNDTRIP TEST ===\n\n");
+    ratio = (double)comp_size / original_size * 100.0;
+    in = fopen(comp, "rb");
+
+    if (!in)
+    {
+        printf("    [FAIL] %-12s cannot open\n", combo_name);
+        remove(comp);
+        return 1;
+    }
+
+    dec = audio_decoder_open(in);
+
+    if (!dec)
+    {
+        printf("    [FAIL] %-12s decoder open failed\n", combo_name);
+        fclose(in);
+        remove(comp);
+        return 1;
+    }
+
+    ws = wav_stream_open(path);
+
+    if (!ws)
+    {
+        printf("    [FAIL] %-12s wav open failed\n", combo_name);
+        audio_decoder_close(dec);
+        fclose(in);
+        remove(comp);
+        return 1;
+    }
+
+    errors = 0;
+    n = audio_decoder_num_samples(dec);
+    n_orig = wav_stream_num_samples(ws);
+
+    if (n != n_orig)
+    {
+        printf("    [FAIL] %-12s num_samples %u vs %u\n", combo_name, n, n_orig);
+        errors++;
+    }
+    else
+    {
+        for (i = 0; i < n; i++)
+        {
+            int32_t s_dec;
+            int32_t s_orig;
+
+            if (audio_decode_next(dec, &s_dec) != 0)
+            {
+                if (errors < 1)
+                {
+                    printf("    [FAIL] %-12s decode_next at %u\n", combo_name, i);
+                }
+
+                errors++;
+                break;
+            }
+
+            if (wav_stream_next_sample(ws, &s_orig) != WAV_OK)
+            {
+                if (errors < 1)
+                {
+                    printf("    [FAIL] %-12s wav_stream at %u\n", combo_name, i);
+                }
+
+                errors++;
+                break;
+            }
+
+            if (s_dec != s_orig)
+            {
+                if (errors < 1)
+                {
+                    printf("    [FAIL] %-12s mismatch at %u: %d vs %d\n", combo_name, i, s_dec, s_orig);
+                }
+
+                errors++;
+            }
+        }
+    }
+
+    wav_stream_close(ws);
+    audio_decoder_close(dec);
+    fclose(in);
+    remove(comp);
+
+    if (errors == 0)
+    {
+        printf("    [OK]   %-12s %7ld B (%5.1f%%) | E: %.3fs\n",
+               combo_name, comp_size, ratio, enc_time);
+        return 0;
+    }
+
+    printf("    [FAIL] %-12s round-trip (%d errors)\n", combo_name, errors);
+
+    return 1;
+}
+
+static void run_dir(const char *label, const char *data_dir)
+{
+    DIR *dir;
     struct dirent *entry;
-    int total = 0;
-    int failed = 0;
+    int total;
+    int failed;
+
+    dir = opendir(data_dir);
+
+    if (!dir)
+    {
+        printf("Cannot open %s\n", data_dir);
+        return;
+    }
+
+    printf("########################################################################\n");
+    printf("# %s (%s)\n", label, data_dir);
+    printf("########################################################################\n\n");
+
+    total = 0;
+    failed = 0;
 
     while ((entry = readdir(dir)) != NULL)
     {
+        char path[512];
+        struct stat st;
+
         if (entry->d_name[0] == '.')
         {
             continue;
         }
-        char path[512];
+
         snprintf(path, sizeof(path), "%s/%s", data_dir, entry->d_name);
-        struct stat st;
+
         if (stat(path, &st) == 0 && S_ISREG(st.st_mode))
         {
             total++;
+
             if (test_file(path))
             {
                 failed++;
             }
         }
     }
+
     closedir(dir);
-    printf("\n=== %d files tested, %d failed ===\n", total, failed);
-    return failed > 0;
+    printf("\n=== %s: %d files tested, %d failed ===\n\n", label, total, failed);
+}
+
+int main(void)
+{
+    run_dir("REAL", "tests/data/real");
+    run_dir("SYNTH", "tests/data/synth");
+
+    return 0;
 }

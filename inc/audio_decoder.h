@@ -18,6 +18,7 @@ uint32_t audio_decoder_num_blocks(audio_decoder_t *dec);
 uint32_t audio_decoder_block_size(audio_decoder_t *dec);
 
 int audio_decoder_seek_block(audio_decoder_t *dec, uint32_t block_index);
+int audio_decoder_advance(audio_decoder_t *dec);
 
 const int32_t *audio_decoder_decode_block(audio_decoder_t *dec, int *cur_samples);
 

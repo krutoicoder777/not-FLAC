@@ -6,70 +6,104 @@ static uint32_t zigzag(int32_t n)
     return ((uint32_t)n << 1) ^ (uint32_t)(n >> 31);
 }
 
-uint32_t sp_encode_elem(int order, const int32_t *samples, int i)
+static int32_t predict_fixed(int order, const int32_t *history)
 {
-    if (i < order)
-    {
-        return zigzag(samples[i]);
-    }
-    int64_t hat = 0;
-    switch (order)
-    {
-    case 0:
-        hat = 0;
-        break;
-    case 1:
-        hat = samples[i - 1];
-        break;
-    case 2:
-        hat = 2 * (int64_t)samples[i - 1] - samples[i - 2];
-        break;
-    case 3:
-        hat = 3 * (int64_t)samples[i - 1] - 3 * (int64_t)samples[i - 2] + samples[i - 3];
-        break;
-    case 4:
-        hat = 4 * (int64_t)samples[i - 1] - 6 * (int64_t)samples[i - 2]
-            + 4 * (int64_t)samples[i - 3] - samples[i - 4];
-        break;
-    }
-    return zigzag(samples[i] - (int32_t)hat);
-}
-
-int32_t sp_decode_prediction(int order, const int32_t *history, int count)
-{
-    if (count < order)
+    if (order == 0)
     {
         return 0;
     }
-    int64_t hat = 0;
-    switch (order)
+
+    if (order == 1)
     {
-    case 0:
-        hat = 0;
-        break;
-    case 1:
-        hat = history[0];
-        break;
-    case 2:
-        hat = 2 * (int64_t)history[0] - history[1];
-        break;
-    case 3:
-        hat = 3 * (int64_t)history[0] - 3 * (int64_t)history[1] + history[2];
-        break;
-    case 4:
-        hat = 4 * (int64_t)history[0] - 6 * (int64_t)history[1]
-            + 4 * (int64_t)history[2] - history[3];
-        break;
+        return history[0];
     }
-    return (int32_t)hat;
+
+    if (order == 2)
+    {
+        return 2 * history[0] - history[1];
+    }
+
+    if (order == 3)
+    {
+        return 3 * history[0] - 3 * history[1] + history[2];
+    }
+
+    if (order == 4)
+    {
+        return 4 * history[0] - 6 * history[1] + 4 * history[2] - history[3];
+    }
+
+    {
+        int32_t h0 = history[0];
+        int32_t h1 = history[1];
+        int32_t h2 = history[2];
+        int32_t h3 = history[3];
+        int32_t h4 = history[4];
+
+        if (order == 5)
+        {
+            return 5 * h0 - 10 * h1 + 10 * h2 - 5 * h3 + h4;
+        }
+
+        {
+            int32_t h5 = history[5];
+            return 6 * h0 - 15 * h1 + 20 * h2 - 15 * h3 + 6 * h4 - h5;
+        }
+    }
 }
 
-uint64_t sp_cost(int order, const int32_t *samples, int n)
+int32_t sp_decode_prediction(int order, const int32_t *history, int history_fill)
 {
-    uint64_t sum = 0;
-    for (int i = 0; i < n; i++)
+    if (order <= 0 || history_fill < order)
     {
-        sum += sp_encode_elem(order, samples, i);
+        return 0;
     }
-    return sum;
+
+    return predict_fixed(order, history);
+}
+
+uint32_t sp_encode_elem(int order, const int32_t *samples, int idx)
+{
+    int32_t hat;
+    int32_t residual;
+
+    if (idx < order)
+    {
+        return zigzag(samples[idx]);
+    }
+
+    if (order == 0)
+    {
+        hat = 0;
+    }
+    else if (order == 1)
+    {
+        hat = samples[idx - 1];
+    }
+    else if (order == 2)
+    {
+        hat = 2 * samples[idx - 1] - samples[idx - 2];
+    }
+    else if (order == 3)
+    {
+        hat = 3 * samples[idx - 1] - 3 * samples[idx - 2] + samples[idx - 3];
+    }
+    else if (order == 4)
+    {
+        hat = 4 * samples[idx - 1] - 6 * samples[idx - 2] + 4 * samples[idx - 3] - samples[idx - 4];
+    }
+    else if (order == 5)
+    {
+        hat = 5 * samples[idx - 1] - 10 * samples[idx - 2] + 10 * samples[idx - 3]
+            - 5 * samples[idx - 4] + samples[idx - 5];
+    }
+    else
+    {
+        hat = 6 * samples[idx - 1] - 15 * samples[idx - 2] + 20 * samples[idx - 3]
+            - 15 * samples[idx - 4] + 6 * samples[idx - 5] - samples[idx - 6];
+    }
+
+    residual = samples[idx] - hat;
+
+    return zigzag(residual);
 }

@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-uint32_t sp_encode_elem(int order, const int32_t *samples, int i);
-int32_t sp_decode_prediction(int order, const int32_t *history, int count);
-uint64_t sp_cost(int order, const int32_t *samples, int n);
+int32_t sp_decode_prediction(int order, const int32_t *history, int history_fill);
+
+uint32_t sp_encode_elem(int order, const int32_t *samples, int idx);
 
 #endif

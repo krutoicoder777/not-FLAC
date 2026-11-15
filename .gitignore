@@ -4,4 +4,3 @@ build/
 *.exe
 *.out
 *.wav
-!wav.wav

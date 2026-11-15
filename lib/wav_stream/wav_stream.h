@@ -22,5 +22,5 @@ uint16_t wav_stream_bits_per_sample(wav_stream_t *ws);
 uint32_t wav_stream_num_samples(wav_stream_t *ws);
 int wav_stream_seek_sample(wav_stream_t *ws, uint32_t sample_index);
 int wav_stream_next_sample(wav_stream_t *ws, int32_t *sample);
-
+long wav_stream_data_offset(wav_stream_t *ws);
 #endif

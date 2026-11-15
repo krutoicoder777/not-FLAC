@@ -10,6 +10,6 @@ wav_writer_t *wav_writer_create(const char *filename, uint32_t sample_rate, uint
 void wav_writer_destroy(wav_writer_t *w);
 
 int wav_writer_write_sample(wav_writer_t *w, int32_t sample);
-int wav_writer_write_samples(wav_writer_t *w, const int32_t *samples, uint32_t count);
+int wav_writer_write_block(wav_writer_t *w, const int32_t *samples, uint32_t count);
 
 #endif
